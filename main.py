@@ -17,11 +17,15 @@ from src.services import ConsorzioService
 from src.utils import validate_coordinates
 from src.config import STOPS_COORDINATES
 from src.frontend_api import router as frontend_router
-from src.database import init_db
+from src.database import init_db, get_db
+from src.db_service import DatabaseService
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
+# Initialize services
+service = ConsorzioService()
+db_service = DatabaseService()
 app = FastAPI(
     title="Consorzio Autolinee Cosenza API",
     description="API completa para consultar horarios de autobuses del Consorzio Autolinee Cosenza",
@@ -58,10 +62,13 @@ service = ConsorzioService()
 # Core Schedule Endpoints
 
 @app.get("/lines", response_model=List[LineResponse], tags=["Core"])
-def list_lines():
+def list_lines(db: Session = Depends(get_db)):
     """Obtener todas las líneas de autobús disponibles."""
     logger.info("API call: list_lines")
-    return JSONResponse(content=service.get_lines())
+    routes = db_service.get_all_routes(db)
+    # Convert to old format
+    lines = [{"value": r["id"], "label": r["name"]} for r in routes]
+    return JSONResponse(content=lines)
 
 
 @app.get("/itineraries/{line_id}", response_model=List[ItineraryResponse], tags=["Core"])
@@ -165,7 +172,8 @@ def get_structured_timetable(line_id: str, itinerary: str, periodicity: str):
 @app.get("/search/stops", tags=["Search"])
 def search_stops_endpoint(
     q: str = Query(..., description="Consulta de búsqueda para nombres de paradas"), 
-    limit: int = Query(10, description="Número máximo de resultados")
+    limit: int = Query(10, description="Número máximo de resultados"),
+    db: Session = Depends(get_db)
 ):
     """Buscar paradas por nombre con coincidencia difusa."""
     logger.info(f"API call: search_stops with query '{q}'")
@@ -174,7 +182,7 @@ def search_stops_endpoint(
         raise HTTPException(status_code=400, detail="La consulta debe tener al menos 2 caracteres")
     
     try:
-        results = service.search_stops(q, limit)
+        results = db_service.search_stops(db, query=q, limit=limit)
         return JSONResponse(content={
             "query": q,
             "results": results,
@@ -186,15 +194,19 @@ def search_stops_endpoint(
 
 
 @app.get("/stops/all", tags=["Search"])
-def get_all_stops():
+def get_all_stops(db: Session = Depends(get_db)):
     """Obtener todas las paradas disponibles con sus líneas asociadas."""
     logger.info("API call: get_all_stops")
     
     try:
-        stops_index = service._build_stops_index()
+        # Get all stops from database
+        from src.db_models import Stop
+        stops = db.query(Stop).all()
+        stops_list = [s.to_dict() for s in stops]
+        
         return JSONResponse(content={
-            "stops": list(stops_index.values()),
-            "count": len(stops_index)
+            "stops": stops_list,
+            "count": len(stops_list)
         })
     except Exception as e:
         logger.error(f"Error getting all stops: {e}")
@@ -454,7 +466,8 @@ def get_nearby_stops(
     lat: float = Query(..., description="Latitud"),
     lon: float = Query(..., description="Longitud"),
     radius: float = Query(1.0, description="Radio de búsqueda en kilómetros"),
-    limit: int = Query(10, description="Número máximo de resultados")
+    limit: int = Query(10, description="Número máximo de resultados"),
+    db: Session = Depends(get_db)
 ):
     """Encontrar paradas cerca de una ubicación dada."""
     logger.info(f"API call: get_nearby_stops at {lat}, {lon}")
@@ -463,12 +476,26 @@ def get_nearby_stops(
         raise HTTPException(status_code=400, detail="Coordenadas inválidas")
     
     try:
-        nearby = service.find_nearby_stops(lat, lon, radius, limit)
+        nearby = db_service.search_stops(db, lat=lat, lng=lon, radius=radius, limit=limit)
+        
+        # Calculate distances
+        from src.utils import calculate_distance
+        results = []
+        for stop in nearby:
+            if stop.get("latitude") and stop.get("longitude"):
+                distance = calculate_distance(lat, lon, stop["latitude"], stop["longitude"])
+                results.append({
+                    "stop": stop,
+                    "distance": round(distance, 3)
+                })
+        
+        results.sort(key=lambda x: x["distance"])
+        
         return JSONResponse(content={
             "location": {"lat": lat, "lon": lon},
             "radius_km": radius,
-            "nearby_stops": nearby,
-            "count": len(nearby)
+            "nearby_stops": results,
+            "count": len(results)
         })
     except Exception as e:
         logger.error(f"Error finding nearby stops: {e}")
