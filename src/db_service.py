@@ -87,13 +87,44 @@ class DatabaseService:
         db: Session, 
         stop_id: str, 
         limit: int = 10,
-        periodicity: str = None
+        periodicity: str = None,
+        after_time: str = None
     ) -> List[Dict]:
-        """Get next departures from a stop."""
+        """Get next departures from a stop, handling late night (after 11 PM)."""
+        from datetime import datetime, time as dt_time
+        
         query = db.query(Departure).filter(Departure.stop_id == stop_id)
+        
+        # Determine periodicity if not provided
+        if not periodicity:
+            now = datetime.now()
+            is_weekend = now.weekday() >= 5
+            month = now.month
+            
+            if is_weekend:
+                periodicity = "FEST"
+            elif month == 8:
+                periodicity = "EST"
+            elif month >= 9 or month <= 6:
+                periodicity = "SCO"
+            else:
+                periodicity = "F"
         
         if periodicity:
             query = query.filter(Departure.periodicity == periodicity)
+        
+        # Handle late night (after 11 PM) - show tomorrow's early morning buses
+        if after_time:
+            current_hour = int(after_time.split(":")[0])
+            if current_hour >= 23:
+                # Show buses from 06:00 to 09:00 next day
+                query = query.filter(
+                    Departure.departure_time >= "06:00",
+                    Departure.departure_time <= "09:00"
+                )
+            else:
+                # Show buses after current time
+                query = query.filter(Departure.departure_time >= after_time)
         
         departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
         
@@ -120,32 +151,47 @@ class DatabaseService:
         target_date: date = None,
         stop_id: str = None
     ) -> Optional[Dict]:
-        """Get schedule for a route."""
+        """Get schedule for a route with smart periodicity selection."""
         if target_date is None:
             target_date = date.today()
         
-        # Determine periodicity based on date
+        # Determine periodicity based on date and time
         is_weekend = target_date.weekday() >= 5
         month = target_date.month
+        day = target_date.day
+        
+        # Check if it's school period (Sept 10 - June 30, excluding August)
+        is_school_period = (month >= 9 or month <= 6) and month != 8
         
         # Priority order for periodicity
         if is_weekend:
-            periodicity_priority = ["FEST", "F"]
+            # Weekends and holidays
+            periodicity_priority = ["FEST", "Fest", "F", "Fer"]
         elif month == 8:
-            periodicity_priority = ["EST", "F"]
-        elif month >= 9 or month <= 6:
-            periodicity_priority = ["SCO", "F"]
+            # August (summer)
+            periodicity_priority = ["EST", "Est", "Non Scol", "F", "Fer"]
+        elif is_school_period:
+            # School period (Sept 10 - June 30)
+            if month == 9 and day < 10:
+                # Before Sept 10 = non-school
+                periodicity_priority = ["Non Scol", "F", "Fer"]
+            else:
+                # School period
+                periodicity_priority = ["SCO", "Scol", "Univ", "F", "Fer"]
         else:
-            periodicity_priority = ["F"]
+            # Non-school period (July, early Sept)
+            periodicity_priority = ["Non Scol", "F", "Fer"]
         
         # Try to find schedule with preferred periodicity
         schedule = None
+        selected_periodicity = None
         for periodicity in periodicity_priority:
             schedule = db.query(Schedule).filter(
                 Schedule.route_id == route_id,
                 Schedule.periodicity == periodicity
             ).first()
             if schedule:
+                selected_periodicity = periodicity
                 break
         
         if not schedule:

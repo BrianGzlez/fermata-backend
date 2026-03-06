@@ -148,17 +148,29 @@ def get_stop_departures(
 ):
     """
     Get next departures from a specific stop.
+    Handles late night (after 11 PM) by showing tomorrow's early buses.
     """
     logger.info(f"Frontend API: get_stop_departures - {stop_id}")
     
     try:
+        from datetime import datetime
+        
         # Get stop info
         stop = db_service.get_stop(db, stop_id)
         if not stop:
             raise HTTPException(status_code=404, detail=f"Stop '{stop_id}' not found")
         
-        # Get departures
-        departures_data = db_service.get_departures(db, stop_id, limit)
+        # Get current time to handle late night
+        now = datetime.now()
+        current_time = now.strftime("%H:%M")
+        
+        # Get departures (handles late night automatically)
+        departures_data = db_service.get_departures(
+            db, 
+            stop_id, 
+            limit,
+            after_time=current_time
+        )
         
         # Convert to frontend format
         departures = [_departure_to_frontend_format(dep, stop_id) 
@@ -243,6 +255,7 @@ def get_route_schedule(
 ):
     """
     Get schedule for a specific route on a given date.
+    Returns 200 with empty schedules array if no data found.
     """
     logger.info(f"Frontend API: get_route_schedule - {route_id}, date={date}, stopId={stopId}")
     
@@ -260,12 +273,19 @@ def get_route_schedule(
         schedule = db_service.get_route_schedule(db, route_id, target_date, stopId)
         
         if not schedule:
-            raise HTTPException(status_code=404, detail=f"Route '{route_id}' not found")
+            # Return empty schedule instead of 404
+            route_data = db_service.get_route(db, route_id)
+            route_name = route_data["name"] if route_data else f"Línea {route_id}"
+            
+            return {
+                "routeId": route_id,
+                "routeName": route_name,
+                "date": target_date.isoformat(),
+                "schedules": []
+            }
         
         return schedule
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error getting route schedule: {e}")
         raise HTTPException(status_code=500, detail=str(e))
