@@ -8,9 +8,11 @@ Next.js frontend, adapting the backend data to the required format.
 import logging
 from typing import List, Dict, Optional
 from datetime import datetime, date
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
+from sqlalchemy.orm import Session
 
-from .services import ConsorzioService
+from .database import get_db
+from .db_service import DatabaseService
 from .config import STOPS_COORDINATES
 from .utils import similarity, calculate_distance, calculate_time_diff
 
@@ -19,8 +21,8 @@ logger = logging.getLogger(__name__)
 # Create router for frontend API endpoints
 router = APIRouter(prefix="/api", tags=["Frontend API"])
 
-# Initialize service
-service = ConsorzioService()
+# Initialize database service
+db_service = DatabaseService()
 
 
 def _generate_stop_id(stop_name: str) -> str:
@@ -49,15 +51,15 @@ def _stop_to_frontend_format(stop_info: Dict, stop_name: str = None) -> Dict:
 
 def _departure_to_frontend_format(departure: Dict, stop_id: str) -> Dict:
     """Convert backend departure format to frontend Departure format."""
-    departure_time = departure.get("departure_time", "")
+    departure_time = departure.get("departureTime", "")
     
     # Calculate minutes until departure (simplified - would need current time)
     # For now, we'll leave it as None
     
     return {
-        "id": f"{stop_id}-{departure.get('line_id', '')}-{departure.get('trip_id', '')}",
-        "routeId": departure.get("line_id", ""),
-        "routeName": f"Línea {departure.get('line_id', '')}",
+        "id": f"{stop_id}-{departure.get('routeId', '')}-{departure.get('tripId', '')}",
+        "routeId": departure.get("routeId", ""),
+        "routeName": f"Línea {departure.get('routeId', '')}",
         "destination": departure.get("destination", ""),
         "departureTime": departure_time,
         "estimatedTime": None,  # Would need real-time data
@@ -65,7 +67,7 @@ def _departure_to_frontend_format(departure: Dict, stop_id: str) -> Dict:
         "status": "on-time",  # Would need real-time data
         "platform": None,
         "realTime": False,  # Our data is scheduled, not real-time
-        "periodicity": departure.get("periodicity_value", "F")
+        "periodicity": departure.get("periodicity", "F")
     }
 
 
@@ -96,7 +98,8 @@ def search_stops(
     lat: float = Query(None, description="Latitude for proximity search"),
     lng: float = Query(None, description="Longitude for proximity search"),
     radius: float = Query(2.0, description="Search radius in km"),
-    limit: int = Query(10, description="Maximum results")
+    limit: int = Query(10, description="Maximum results"),
+    db: Session = Depends(get_db)
 ):
     """
     Search stops by name or location.
@@ -105,67 +108,29 @@ def search_stops(
     """
     logger.info(f"Frontend API: search_stops - query={query}, lat={lat}, lng={lng}")
     
-    stops = []
-    
-    # Proximity search
-    if lat is not None and lng is not None:
-        try:
-            nearby = service.find_nearby_stops(lat, lng, radius, limit)
-            stops = [_stop_to_frontend_format(item["stop"], item["stop"]["name"]) 
-                    for item in nearby]
-        except Exception as e:
-            logger.error(f"Error in proximity search: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-    
-    # Text search
-    elif query:
-        try:
-            results = service.search_stops(query, limit)
-            stops = [_stop_to_frontend_format(stop, stop["name"]) for stop in results]
-        except Exception as e:
-            logger.error(f"Error in text search: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-    
-    else:
-        raise HTTPException(
-            status_code=400, 
-            detail="Either 'query' or both 'lat' and 'lng' must be provided"
-        )
-    
-    return {"stops": stops}
+    try:
+        results = db_service.search_stops(db, query, lat, lng, radius, limit)
+        stops = [_stop_to_frontend_format(stop, stop["name"]) for stop in results]
+        return {"stops": stops}
+    except Exception as e:
+        logger.error(f"Error in search: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/stops/{stop_id}")
-def get_stop_by_id(stop_id: str):
+def get_stop_by_id(stop_id: str, db: Session = Depends(get_db)):
     """
     Get detailed information about a specific stop.
     """
     logger.info(f"Frontend API: get_stop_by_id - {stop_id}")
     
-    # Convert ID back to name (reverse of _generate_stop_id)
-    stop_name = stop_id.replace("-", " ").upper()
-    
     try:
-        # Search for the stop
-        results = service.search_stops(stop_name, limit=5)
+        stop = db_service.get_stop(db, stop_id)
         
-        if not results:
+        if not stop:
             raise HTTPException(status_code=404, detail=f"Stop with ID '{stop_id}' not found")
         
-        # Find best match
-        best_match = None
-        best_score = 0
-        
-        for stop in results:
-            score = similarity(_generate_stop_id(stop["name"]), stop_id)
-            if score > best_score:
-                best_score = score
-                best_match = stop
-        
-        if best_match and best_score > 0.8:
-            return _stop_to_frontend_format(best_match, best_match["name"])
-        else:
-            raise HTTPException(status_code=404, detail=f"Stop with ID '{stop_id}' not found")
+        return _stop_to_frontend_format(stop, stop["name"])
             
     except HTTPException:
         raise
@@ -178,19 +143,22 @@ def get_stop_by_id(stop_id: str):
 def get_stop_departures(
     stop_id: str,
     limit: int = Query(10, description="Number of departures"),
-    timeWindow: int = Query(60, description="Time window in minutes")
+    timeWindow: int = Query(60, description="Time window in minutes"),
+    db: Session = Depends(get_db)
 ):
     """
     Get next departures from a specific stop.
     """
     logger.info(f"Frontend API: get_stop_departures - {stop_id}")
     
-    # Convert ID to name
-    stop_name = stop_id.replace("-", " ").upper()
-    
     try:
+        # Get stop info
+        stop = db_service.get_stop(db, stop_id)
+        if not stop:
+            raise HTTPException(status_code=404, detail=f"Stop '{stop_id}' not found")
+        
         # Get departures
-        departures_data = service.get_next_departures(stop_name, limit)
+        departures_data = db_service.get_departures(db, stop_id, limit)
         
         # Convert to frontend format
         departures = [_departure_to_frontend_format(dep, stop_id) 
@@ -198,7 +166,7 @@ def get_stop_departures(
         
         return {
             "stopId": stop_id,
-            "stopName": stop_name,
+            "stopName": stop["name"],
             "departures": departures,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
@@ -212,15 +180,15 @@ def get_stop_departures(
 # Routes Endpoints
 
 @router.get("/routes")
-def get_all_routes():
+def get_all_routes(db: Session = Depends(get_db)):
     """
     Get all available bus routes/lines.
     """
     logger.info("Frontend API: get_all_routes")
     
     try:
-        lines = service.get_lines()
-        routes = [_route_to_frontend_format(line) for line in lines]
+        routes_data = db_service.get_all_routes(db)
+        routes = [_route_to_frontend_format({"value": r["id"], "label": r["name"]}) for r in routes_data]
         
         return {"routes": routes}
         
@@ -230,47 +198,34 @@ def get_all_routes():
 
 
 @router.get("/routes/{route_id}")
-def get_route_details(route_id: str):
+def get_route_details(route_id: str, db: Session = Depends(get_db)):
     """
     Get detailed information about a specific route/line.
     """
     logger.info(f"Frontend API: get_route_details - {route_id}")
     
     try:
-        # Get itineraries for this line
-        itineraries = service.get_itineraries(route_id)
+        route_data = db_service.get_route(db, route_id)
         
-        if not itineraries:
+        if not route_data:
             raise HTTPException(status_code=404, detail=f"Route '{route_id}' not found")
         
-        # Get schedule for first itinerary to extract stops
-        first_itinerary = itineraries[0]["value"]
-        periodicities = service.get_periodicities(route_id, first_itinerary)
+        # Extract stops in order
+        stops_list = []
+        for idx, stop in enumerate(route_data.get("stops", [])):
+            stop_data = {
+                "id": stop["id"],
+                "name": stop["name"],
+                "order": idx
+            }
+            stops_list.append(stop_data)
         
-        if periodicities:
-            first_periodicity = periodicities[0]["value"]
-            schedule = service.get_schedule(route_id, first_itinerary, first_periodicity)
-            
-            # Extract stops in order
-            stops_list = []
-            for idx, stop in enumerate(schedule.get("stops", [])):
-                stop_data = {
-                    "id": _generate_stop_id(stop["name"]),
-                    "name": stop["name"],
-                    "order": idx
-                }
-                stops_list.append(stop_data)
-            
-            # Get line info
-            lines = service.get_lines()
-            line_info = next((l for l in lines if l["value"] == route_id), None)
-            
-            if line_info:
-                route = _route_to_frontend_format(line_info, schedule.get("stops", []))
-                route["stops"] = stops_list
-                return route
-        
-        raise HTTPException(status_code=404, detail=f"Could not get details for route '{route_id}'")
+        route = _route_to_frontend_format(
+            {"value": route_data["id"], "label": route_data["name"]},
+            route_data.get("stops", [])
+        )
+        route["stops"] = stops_list
+        return route
         
     except HTTPException:
         raise
@@ -283,7 +238,8 @@ def get_route_details(route_id: str):
 def get_route_schedule(
     route_id: str,
     date: str = Query(None, description="Date in YYYY-MM-DD format"),
-    stopId: str = Query(None, description="Filter by specific stop")
+    stopId: str = Query(None, description="Filter by specific stop"),
+    db: Session = Depends(get_db)
 ):
     """
     Get schedule for a specific route on a given date.
@@ -301,58 +257,12 @@ def get_route_schedule(
         target_date = datetime.now().date()
     
     try:
-        # Get itineraries
-        itineraries = service.get_itineraries(route_id)
+        schedule = db_service.get_route_schedule(db, route_id, target_date, stopId)
         
-        if not itineraries:
+        if not schedule:
             raise HTTPException(status_code=404, detail=f"Route '{route_id}' not found")
         
-        # Get schedule for first itinerary with smart periodicity
-        first_itinerary = itineraries[0]["value"]
-        schedule = service.get_current_schedule(route_id, first_itinerary, target_date)
-        
-        # Build schedule response
-        schedules = []
-        
-        for stop in schedule.get("stops", []):
-            stop_name = stop["name"]
-            stop_id_generated = _generate_stop_id(stop_name)
-            
-            # Filter by stopId if provided
-            if stopId and stop_id_generated != stopId:
-                continue
-            
-            # Get times for this stop
-            times = []
-            if stop_name in schedule.get("schedule_matrix", {}):
-                stop_times = schedule["schedule_matrix"][stop_name]
-                for trip_id, time in stop_times.items():
-                    times.append({
-                        "departureTime": time,
-                        "periodicity": schedule.get("metadata", {}).get("selected_periodicity", "F"),
-                        "realTime": False
-                    })
-            
-            # Sort times
-            times.sort(key=lambda x: x["departureTime"])
-            
-            schedules.append({
-                "stopId": stop_id_generated,
-                "stopName": stop_name,
-                "times": times
-            })
-        
-        # Get line info
-        lines = service.get_lines()
-        line_info = next((l for l in lines if l["value"] == route_id), None)
-        route_name = line_info["label"] if line_info else f"Línea {route_id}"
-        
-        return {
-            "routeId": route_id,
-            "routeName": route_name,
-            "date": target_date.isoformat(),
-            "schedules": schedules
-        }
+        return schedule
         
     except HTTPException:
         raise
@@ -368,89 +278,84 @@ def plan_journey(
     time: str = Query(None, description="Desired departure time (ISO 8601)"),
     arriveBy: bool = Query(False, description="If true, 'time' is arrival time"),
     maxTransfers: int = Query(2, description="Maximum number of transfers"),
-    modes: str = Query("bus", description="Transport modes (comma-separated)")
+    modes: str = Query("bus", description="Transport modes (comma-separated)"),
+    db: Session = Depends(get_db)
 ):
     """
     Calculate routes between two stops.
     """
     logger.info(f"Frontend API: plan_journey - from={from_stop}, to={to_stop}")
     
-    # Convert IDs to names
-    from_name = from_stop.replace("-", " ").upper()
-    to_name = to_stop.replace("-", " ").upper()
-    
     try:
         # Find routes
-        routes = service.find_routes(from_name, to_name, limit=3)
+        routes = db_service.plan_route(db, from_stop, to_stop, limit=3)
         
         # Convert to Journey format
         journeys = []
         
-        for idx, route in enumerate(routes):
-            # Build legs
-            legs = []
+        for idx, route_data in enumerate(routes):
+            route = route_data["route"]
+            from_time = route_data["from_time"]
+            to_time = route_data["to_time"]
             
-            for step in route.get("steps", []):
-                # Get stop details
-                from_stop_info = {"id": _generate_stop_id(step["from_stop"]), "name": step["from_stop"]}
-                to_stop_info = {"id": _generate_stop_id(step["to_stop"]), "name": step["to_stop"]}
-                
-                # Get coordinates if available
-                from_coords = STOPS_COORDINATES.get(step["from_stop"], {})
-                to_coords = STOPS_COORDINATES.get(step["to_stop"], {})
-                
-                if from_coords:
-                    from_stop_info.update({"latitude": from_coords["lat"], "longitude": from_coords["lon"]})
-                if to_coords:
-                    to_stop_info.update({"latitude": to_coords["lat"], "longitude": to_coords["lon"]})
-                
-                # Calculate distance if coordinates available
-                distance = 0
-                if from_coords and to_coords:
-                    distance = calculate_distance(
-                        from_coords["lat"], from_coords["lon"],
-                        to_coords["lat"], to_coords["lon"]
-                    )
-                
-                duration = calculate_time_diff(step["departure_time"], step["arrival_time"])
-                
-                leg = {
-                    "type": "transit",
-                    "routeId": step["line_id"],
-                    "routeName": f"Línea {step['line_id']}",
-                    "from": from_stop_info,
-                    "to": to_stop_info,
-                    "departureTime": step["departure_time"],
-                    "arrivalTime": step["arrival_time"],
-                    "duration": duration,
-                    "distance": round(distance, 2),
-                    "stops": []  # Could be populated with intermediate stops
-                }
-                
-                legs.append(leg)
+            # Get stop details
+            from_stop_obj = db_service.get_stop(db, from_stop)
+            to_stop_obj = db_service.get_stop(db, to_stop)
             
-            # Calculate totals
-            if legs:
-                total_duration = route.get("total_time", 0)
-                total_distance = sum(leg["distance"] for leg in legs)
-                
-                journey = {
-                    "id": f"journey-{idx + 1}",
-                    "origin": legs[0]["from"],
-                    "destination": legs[-1]["to"],
-                    "legs": legs,
-                    "totalDuration": total_duration,
-                    "totalDistance": round(total_distance, 2),
-                    "departureTime": legs[0]["departureTime"],
-                    "arrivalTime": legs[-1]["arrivalTime"],
-                    "transfers": route.get("transfers", 0)
-                }
-                
-                journeys.append(journey)
+            from_stop_info = {
+                "id": from_stop,
+                "name": from_stop_obj["name"] if from_stop_obj else from_stop,
+                "latitude": from_stop_obj.get("latitude", 0) if from_stop_obj else 0,
+                "longitude": from_stop_obj.get("longitude", 0) if from_stop_obj else 0
+            }
+            
+            to_stop_info = {
+                "id": to_stop,
+                "name": to_stop_obj["name"] if to_stop_obj else to_stop,
+                "latitude": to_stop_obj.get("latitude", 0) if to_stop_obj else 0,
+                "longitude": to_stop_obj.get("longitude", 0) if to_stop_obj else 0
+            }
+            
+            # Calculate distance
+            distance = 0
+            if from_stop_info["latitude"] and to_stop_info["latitude"]:
+                distance = calculate_distance(
+                    from_stop_info["latitude"], from_stop_info["longitude"],
+                    to_stop_info["latitude"], to_stop_info["longitude"]
+                )
+            
+            duration = calculate_time_diff(from_time, to_time)
+            
+            leg = {
+                "type": "transit",
+                "routeId": route.id,
+                "routeName": route.name,
+                "from": from_stop_info,
+                "to": to_stop_info,
+                "departureTime": from_time,
+                "arrivalTime": to_time,
+                "duration": duration,
+                "distance": round(distance, 2),
+                "stops": []
+            }
+            
+            journey = {
+                "id": f"journey-{idx + 1}",
+                "origin": from_stop_info,
+                "destination": to_stop_info,
+                "legs": [leg],
+                "totalDuration": duration,
+                "totalDistance": round(distance, 2),
+                "departureTime": from_time,
+                "arrivalTime": to_time,
+                "transfers": 0
+            }
+            
+            journeys.append(journey)
         
         return {
-            "from": {"id": from_stop, "name": from_name},
-            "to": {"id": to_stop, "name": to_name},
+            "from": {"id": from_stop, "name": from_stop_info["name"]},
+            "to": {"id": to_stop, "name": to_stop_info["name"]},
             "journeys": journeys,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
@@ -466,7 +371,8 @@ def plan_journey(
 @router.get("/alerts")
 def get_service_alerts(
     routeId: str = Query(None, description="Filter by route ID"),
-    severity: str = Query(None, description="Filter by severity")
+    severity: str = Query(None, description="Filter by severity"),
+    db: Session = Depends(get_db)
 ):
     """
     Get active service alerts.
@@ -474,11 +380,7 @@ def get_service_alerts(
     logger.info(f"Frontend API: get_service_alerts - routeId={routeId}, severity={severity}")
     
     try:
-        alerts_data = service.get_service_alerts(routeId)
-        
-        # Filter by severity if provided
-        if severity:
-            alerts_data = [a for a in alerts_data if a.get("severity") == severity]
+        alerts_data = db_service.get_alerts(db, routeId, severity)
         
         # Convert to frontend format
         alerts = []
@@ -487,9 +389,9 @@ def get_service_alerts(
                 "id": alert.get("id", ""),
                 "severity": alert.get("severity", "low"),
                 "message": alert.get("message", ""),
-                "affectedRoutes": alert.get("line_ids", []),
-                "startTime": alert.get("created_at"),
-                "endTime": None  # Would need to be added to backend data
+                "affectedRoutes": alert.get("affectedRoutes", []),
+                "startTime": alert.get("createdAt"),
+                "endTime": None
             })
         
         return {

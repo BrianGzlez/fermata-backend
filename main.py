@@ -17,6 +17,7 @@ from src.services import ConsorzioService
 from src.utils import validate_coordinates
 from src.config import STOPS_COORDINATES
 from src.frontend_api import router as frontend_router
+from src.database import init_db
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,14 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# Initialize database on startup
+@app.on_event("startup")
+def startup_event():
+    """Initialize database tables on startup."""
+    logger.info("Initializing database...")
+    init_db()
+    logger.info("Database initialized successfully")
 
 # Add CORS middleware
 app.add_middleware(

@@ -16,3 +16,29 @@ services:
         value: 100
       - key: REQUEST_TIMEOUT
         value: 30
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fermati-db
+          property: connectionString
+  
+  - type: cron
+    name: fermati-sync
+    env: python
+    runtime: python
+    region: oregon
+    schedule: "0 2 * * 0"  # Every Sunday at 2 AM
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python sync_data.py --all
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fermati-db
+          property: connectionString
+
+databases:
+  - name: fermati-db
+    databaseName: fermati
+    user: fermati
+    plan: free
