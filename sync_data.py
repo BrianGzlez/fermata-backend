@@ -77,27 +77,40 @@ def sync_stops(db: Session, service: ConsorzioService) -> dict:
                 # Check if stop exists
                 db_stop = db.query(Stop).filter(Stop.id == stop_id).first()
                 
+                new_routes = stop_info.get("lines", [])
+                new_lat = coords.get("lat")
+                new_lon = coords.get("lon")
+                
                 if db_stop:
-                    # Update existing
-                    db_stop.name = stop_name
-                    db_stop.latitude = coords.get("lat")
-                    db_stop.longitude = coords.get("lon")
-                    db_stop.routes = stop_info.get("lines", [])
-                    db_stop.updated_at = datetime.utcnow()
+                    # Check if data changed
+                    data_changed = (
+                        db_stop.name != stop_name or
+                        db_stop.routes != new_routes or
+                        db_stop.latitude != new_lat or
+                        db_stop.longitude != new_lon
+                    )
+                    
+                    if data_changed:
+                        db_stop.name = stop_name
+                        db_stop.latitude = new_lat
+                        db_stop.longitude = new_lon
+                        db_stop.routes = new_routes
+                        db_stop.updated_at = datetime.utcnow()
+                        synced += 1
+                    # else: skip, no changes
                 else:
                     # Create new
                     db_stop = Stop(
                         id=stop_id,
                         name=stop_name,
-                        latitude=coords.get("lat"),
-                        longitude=coords.get("lon"),
-                        routes=stop_info.get("lines", []),
+                        latitude=new_lat,
+                        longitude=new_lon,
+                        routes=new_routes,
                         city="Cosenza",
                         region="Calabria"
                     )
                     db.add(db_stop)
-                
-                synced += 1
+                    synced += 1
                 
             except Exception as e:
                 errors.append(f"Error syncing stop {stop_name}: {str(e)}")
@@ -134,7 +147,7 @@ def sync_routes(db: Session, service: ConsorzioService) -> dict:
     try:
         lines = service.get_lines()
         
-        synced = 0
+        synced_routes = 0
         errors = []
         
         for line in lines:
@@ -161,26 +174,42 @@ def sync_routes(db: Session, service: ConsorzioService) -> dict:
                 # Check if route exists
                 db_route = db.query(Route).filter(Route.id == route_id).first()
                 
+                # Generate new data
+                new_name = line["label"]
+                new_short_name = f"L{route_id}"
+                new_color = generate_color(route_id)
+                
                 if db_route:
-                    # Update existing
-                    db_route.name = line["label"]
-                    db_route.short_name = f"L{route_id}"
-                    db_route.color = generate_color(route_id)
-                    db_route.stops_order = stops_order
-                    db_route.updated_at = datetime.utcnow()
+                    # Check if data changed
+                    data_changed = (
+                        db_route.name != new_name or
+                        db_route.short_name != new_short_name or
+                        db_route.stops_order != stops_order
+                    )
+                    
+                    if data_changed:
+                        db_route.name = new_name
+                        db_route.short_name = new_short_name
+                        db_route.color = new_color
+                        db_route.stops_order = stops_order
+                        db_route.updated_at = datetime.utcnow()
+                        synced_routes += 1
+                    # else: skip, no changes
                 else:
                     # Create new
                     db_route = Route(
                         id=route_id,
-                        name=line["label"],
-                        short_name=f"L{route_id}",
-                        color=generate_color(route_id),
+                        name=new_name,
+                        short_name=new_short_name,
+                        color=new_color,
                         type="bus",
                         stops_order=stops_order
                     )
                     db.add(db_route)
+                    synced_routes += 1
+                    db.add(db_route)
+                    synced_routes += 1
                 
-                synced += 1
                 log(f"  ✓ {route_id}: {line['label']}", "green")
                 
             except Exception as e:
@@ -190,11 +219,11 @@ def sync_routes(db: Session, service: ConsorzioService) -> dict:
         db.commit()
         
         duration = time.time() - start_time
-        log(f"✅ Synced {synced} routes in {duration:.2f}s", "green")
+        log(f"✅ Synced {synced_routes} routes in {duration:.2f}s", "green")
         
         return {
             "status": "success" if not errors else "partial",
-            "synced": synced,
+            "synced": synced_routes,
             "errors": errors,
             "duration": duration
         }
@@ -251,26 +280,42 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                     Schedule.periodicity == periodicity_value
                                 ).first()
                                 
+                                # Check if data changed
+                                new_trips = schedule_data.get("trips", [])
+                                new_stops = schedule_data.get("stops", [])
+                                new_matrix = schedule_data.get("schedule_matrix", {})
+                                new_metadata = schedule_data.get("metadata", {})
+                                
                                 if db_schedule:
-                                    db_schedule.trips = schedule_data.get("trips", [])
-                                    db_schedule.stops = schedule_data.get("stops", [])
-                                    db_schedule.schedule_matrix = schedule_data.get("schedule_matrix", {})
-                                    db_schedule.schedule_metadata = schedule_data.get("metadata", {})
-                                    db_schedule.updated_at = datetime.utcnow()
+                                    # Compare data to see if it changed
+                                    data_changed = (
+                                        db_schedule.trips != new_trips or
+                                        db_schedule.stops != new_stops or
+                                        db_schedule.schedule_matrix != new_matrix
+                                    )
+                                    
+                                    if data_changed:
+                                        db_schedule.trips = new_trips
+                                        db_schedule.stops = new_stops
+                                        db_schedule.schedule_matrix = new_matrix
+                                        db_schedule.schedule_metadata = new_metadata
+                                        db_schedule.updated_at = datetime.utcnow()
+                                        synced_schedules += 1
+                                    # else: skip, no changes
                                 else:
+                                    # New schedule, add it
                                     db_schedule = Schedule(
                                         route_id=route_id,
                                         itinerary=itinerary_value,
                                         periodicity=periodicity_value,
-                                        direction=schedule_data.get("metadata", {}).get("direction"),
-                                        trips=schedule_data.get("trips", []),
-                                        stops=schedule_data.get("stops", []),
-                                        schedule_matrix=schedule_data.get("schedule_matrix", {}),
-                                        schedule_metadata=schedule_data.get("metadata", {})
+                                        direction=new_metadata.get("direction"),
+                                        trips=new_trips,
+                                        stops=new_stops,
+                                        schedule_matrix=new_matrix,
+                                        schedule_metadata=new_metadata
                                     )
                                     db.add(db_schedule)
-                                
-                                synced_schedules += 1
+                                    synced_schedules += 1
                                 
                                 # Save departures for each stop
                                 for trip in schedule_data.get("trips", []):
