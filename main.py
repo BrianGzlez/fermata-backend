@@ -5,9 +5,10 @@ Main FastAPI application for Consorzio Autolinee Cosenza API.
 import logging
 from typing import List
 from datetime import datetime, date
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 from src.models import (
     LineResponse, ItineraryResponse, PeriodicityResponse,
