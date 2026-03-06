@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: fermati-backend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CACHE_SIZE
+        value: 100
+      - key: REQUEST_TIMEOUT
+        value: 30

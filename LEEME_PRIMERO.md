@@ -140,6 +140,13 @@ pip install -r requirements.txt
 python run.py
 ```
 
+### Error al desplegar (Render/Heroku)
+Si ves error de "pydantic-core requires Rust":
+
+✅ **Ya está resuelto** - El `requirements.txt` usa versiones compatibles
+
+Lee: **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** para más detalles
+
 ### No encuentra paradas
 Prueba con: "cosenza", "scalea", "rende", "paola"
 
