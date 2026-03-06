@@ -2,6 +2,7 @@ services:
   - type: web
     name: fermati-backend
     env: python
+    runtime: python
     region: oregon
     plan: free
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
