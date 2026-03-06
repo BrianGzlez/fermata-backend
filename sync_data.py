@@ -325,29 +325,22 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                         
                                         departure_id = f"{stop_id}-{route_id}-{trip['trip_id']}"
                                         
-                                        db_departure = db.query(Departure).filter(
-                                            Departure.id == departure_id
-                                        ).first()
-                                        
                                         destination = schedule_data.get("trips", [{}])[-1].get("stops", [{}])[-1].get("stop", "Unknown")
+                                        departure_time = stop_data["time"]
                                         
-                                        if db_departure:
-                                            db_departure.departure_time = stop_data["time"]
-                                            db_departure.destination = destination
-                                            db_departure.updated_at = datetime.utcnow()
-                                        else:
-                                            db_departure = Departure(
-                                                id=departure_id,
-                                                stop_id=stop_id,
-                                                route_id=route_id,
-                                                route_name=f"Línea {route_id}",
-                                                destination=destination,
-                                                departure_time=stop_data["time"],
-                                                trip_id=trip["trip_id"],
-                                                periodicity=periodicity_value,
-                                                itinerary=itinerary_value
-                                            )
-                                            db.add(db_departure)
+                                        # Use merge to handle insert or update
+                                        db_departure = db.merge(Departure(
+                                            id=departure_id,
+                                            stop_id=stop_id,
+                                            route_id=route_id,
+                                            route_name=f"Línea {route_id}",
+                                            destination=destination,
+                                            departure_time=departure_time,
+                                            trip_id=trip["trip_id"],
+                                            periodicity=periodicity_value,
+                                            itinerary=itinerary_value,
+                                            updated_at=datetime.utcnow()
+                                        ))
                                         
                                         synced_departures += 1
                                 
