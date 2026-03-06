@@ -73,23 +73,37 @@ def list_lines(db: Session = Depends(get_db)):
 
 
 @app.get("/itineraries/{line_id}", response_model=List[ItineraryResponse], tags=["Core"])
-def list_itineraries(line_id: str):
-    """Obtener itinerarios para una línea específica."""
+def list_itineraries(line_id: str, db: Session = Depends(get_db)):
+    """Obtener itinerarios para una línea específica desde BD."""
     logger.info(f"API call: list_itineraries for line {line_id}")
     
     if not line_id or not line_id.strip():
         raise HTTPException(status_code=400, detail="line_id no puede estar vacío")
     
-    itineraries = service.get_itineraries(line_id.strip())
-    if not itineraries:
+    # Get schedules for this route to extract itineraries
+    from src.db_models import Schedule
+    schedules = db.query(Schedule).filter(Schedule.route_id == line_id.strip()).all()
+    
+    if not schedules:
         raise HTTPException(status_code=404, detail="Itinerarios no encontrados para la línea especificada.")
     
-    return JSONResponse(content=itineraries)
+    # Extract unique itineraries
+    itineraries_dict = {}
+    for schedule in schedules:
+        if schedule.itinerary not in itineraries_dict:
+            direction = schedule.schedule_metadata.get("direction", "")
+            label = f"{schedule.itinerary.replace('-', '')}{'A' if 'Andata' in direction else 'R' if 'Ritorno' in direction else ''}"
+            itineraries_dict[schedule.itinerary] = {
+                "value": schedule.itinerary,
+                "label": label
+            }
+    
+    return JSONResponse(content=list(itineraries_dict.values()))
 
 
 @app.get("/periodicities/{line_id}/{itinerary}", response_model=List[PeriodicityResponse], tags=["Core"])
-def list_periodicities(line_id: str, itinerary: str):
-    """Obtener periodicidades para una línea e itinerario específicos."""
+def list_periodicities(line_id: str, itinerary: str, db: Session = Depends(get_db)):
+    """Obtener periodicidades para una línea e itinerario específicos desde BD."""
     logger.info(f"API call: list_periodicities for line {line_id}, itinerary {itinerary}")
     
     if not line_id or not line_id.strip():
@@ -97,7 +111,43 @@ def list_periodicities(line_id: str, itinerary: str):
     if not itinerary or not itinerary.strip():
         raise HTTPException(status_code=400, detail="itinerary no puede estar vacío")
     
-    periodicities = service.get_periodicities(line_id.strip(), itinerary.strip())
+    # Get schedules for this route and itinerary
+    from src.db_models import Schedule
+    schedules = db.query(Schedule).filter(
+        Schedule.route_id == line_id.strip(),
+        Schedule.itinerary == itinerary.strip()
+    ).all()
+    
+    if not schedules:
+        raise HTTPException(status_code=404, detail="Periodicidades no encontradas para la combinación especificada.")
+    
+    # Extract unique periodicities
+    periodicities = []
+    seen = set()
+    periodicity_labels = {
+        "F": "Feriale",
+        "Fer": "Feriale",
+        "SCO": "Scolastico",
+        "Scol": "Scolastico",
+        "NS": "Non Scolastico",
+        "Non Scol": "Non Scolastico",
+        "FEST": "Festivo",
+        "Fest": "Festivo",
+        "EST": "Estivo",
+        "Est": "Estivo",
+        "DF": "Feriale",
+        "Univ": "Universitario"
+    }
+    
+    for schedule in schedules:
+        if schedule.periodicity not in seen:
+            seen.add(schedule.periodicity)
+            periodicities.append({
+                "value": schedule.periodicity,
+                "label": periodicity_labels.get(schedule.periodicity, schedule.periodicity)
+            })
+    
+    return JSONResponse(content=periodicities)
     if not periodicities:
         raise HTTPException(status_code=404, detail="Periodicidades no encontradas para la combinación especificada.")
     
@@ -105,8 +155,8 @@ def list_periodicities(line_id: str, itinerary: str):
 
 
 @app.get("/schedule/{line_id}/{itinerary}/{periodicity}", tags=["Core"])
-def get_timetable(line_id: str, itinerary: str, periodicity: str):
-    """Obtener horario estructurado para los parámetros dados."""
+def get_timetable(line_id: str, itinerary: str, periodicity: str, db: Session = Depends(get_db)):
+    """Obtener horario estructurado para los parámetros dados desde BD."""
     logger.info(f"API call: get_timetable for line {line_id}, itinerary {itinerary}, periodicity {periodicity}")
     
     # Validate inputs
@@ -120,21 +170,34 @@ def get_timetable(line_id: str, itinerary: str, periodicity: str):
         raise HTTPException(status_code=400, detail=f"Datos de entrada inválidos: {e}")
     
     try:
-        schedule = service.get_schedule(request_data.line_id, request_data.itinerary, request_data.periodicity)
+        # Get schedule from database
+        from src.db_models import Schedule
+        schedule = db.query(Schedule).filter(
+            Schedule.route_id == request_data.line_id,
+            Schedule.itinerary == request_data.itinerary,
+            Schedule.periodicity == request_data.periodicity
+        ).first()
         
-        # For backward compatibility, if no structured data, return fallback format
-        if not schedule.get("trips") and "fallback_times" in schedule:
-            return JSONResponse(content=schedule["fallback_times"])
+        if not schedule:
+            raise HTTPException(status_code=404, detail="Horario no encontrado")
         
-        return JSONResponse(content=schedule)
+        # Build response
+        response = {
+            "metadata": schedule.schedule_metadata or {},
+            "trips": schedule.trips or [],
+            "stops": schedule.stops or [],
+            "schedule_matrix": schedule.schedule_matrix or {}
+        }
+        
+        return JSONResponse(content=response)
         
     except HTTPException:
         raise
 
 
 @app.get("/schedule-structured/{line_id}/{itinerary}/{periodicity}", tags=["Core"])
-def get_structured_timetable(line_id: str, itinerary: str, periodicity: str):
-    """Obtener horario estructurado (solo datos estructurados, sin fallback)."""
+def get_structured_timetable(line_id: str, itinerary: str, periodicity: str, db: Session = Depends(get_db)):
+    """Obtener horario estructurado desde BD (solo datos estructurados, sin fallback)."""
     logger.info(f"API call: get_structured_timetable for line {line_id}, itinerary {itinerary}, periodicity {periodicity}")
     
     try:
@@ -147,14 +210,30 @@ def get_structured_timetable(line_id: str, itinerary: str, periodicity: str):
         raise HTTPException(status_code=400, detail=f"Datos de entrada inválidos: {e}")
     
     try:
-        schedule = service.get_schedule(request_data.line_id, request_data.itinerary, request_data.periodicity)
+        # Get schedule from database
+        from src.db_models import Schedule
+        schedule = db.query(Schedule).filter(
+            Schedule.route_id == request_data.line_id,
+            Schedule.itinerary == request_data.itinerary,
+            Schedule.periodicity == request_data.periodicity
+        ).first()
+        
+        if not schedule:
+            raise HTTPException(status_code=404, detail="Horario no encontrado")
         
         structured_response = {
-            "metadata": schedule.get("metadata", {}),
-            "trips": schedule.get("trips", []),
-            "stops": schedule.get("stops", []),
-            "schedule_matrix": schedule.get("schedule_matrix", {}),
+            "metadata": schedule.schedule_metadata or {},
+            "trips": schedule.trips or [],
+            "stops": schedule.stops or [],
+            "schedule_matrix": schedule.schedule_matrix or {},
             "summary": {
+                "trips_count": len(schedule.trips or []),
+                "stops_count": len(schedule.stops or []),
+                "has_structured_data": len(schedule.trips or []) > 0
+            }
+        }
+        
+        return JSONResponse(content=structured_response)
                 "trips_count": len(schedule.get("trips", [])),
                 "stops_count": len(schedule.get("stops", [])),
                 "has_structured_data": len(schedule.get("trips", [])) > 0
@@ -218,7 +297,47 @@ def get_all_stops(db: Session = Depends(get_db)):
 def get_stop_departures(
     stop_name: str, 
     limit: int = Query(5, description="Número máximo de salidas"),
-    date: str = Query(None, description="Fecha en formato YYYY-MM-DD (por defecto: hoy)")
+    date: str = Query(None, description="Fecha en formato YYYY-MM-DD (por defecto: hoy)"),
+    db: Session = Depends(get_db)
+):
+    """Obtener próximas salidas desde una parada específica desde BD."""
+    logger.info(f"API call: get_stop_departures for '{stop_name}' on date {date}")
+    
+    # Parse target date
+    target_date = None
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD")
+    else:
+        target_date = datetime.now().date()
+    
+    try:
+        # Generate stop_id from name
+        from src.utils import generate_stop_id
+        stop_id = stop_name.lower().replace(" ", "-").replace("'", "")
+        
+        # Get current time for filtering
+        current_time = datetime.now().strftime("%H:%M")
+        
+        # Get departures
+        departures = db_service.get_departures(
+            db, 
+            stop_id, 
+            limit,
+            after_time=current_time
+        )
+        
+        return JSONResponse(content={
+            "stop_name": stop_name,
+            "target_date": target_date.isoformat(),
+            "departures": departures,
+            "count": len(departures)
+        })
+    except Exception as e:
+        logger.error(f"Error getting departures: {e}")
+        raise HTTPException(status_code=500, detail=f"Error obteniendo salidas: {str(e)}")
 ):
     """Obtener próximas salidas desde una parada específica con periodicidad inteligente."""
     logger.info(f"API call: get_stop_departures for '{stop_name}' on date {date}")
@@ -356,21 +475,41 @@ def _get_periodicity_reason(target_date=None):
 def plan_route(
     from_stop: str = Query(..., description="Nombre de parada de origen"),
     to_stop: str = Query(..., description="Nombre de parada de destino"),
-    limit: int = Query(3, description="Número máximo de opciones de ruta")
+    limit: int = Query(3, description="Número máximo de opciones de ruta"),
+    db: Session = Depends(get_db)
 ):
-    """Encontrar rutas entre dos paradas."""
+    """Encontrar rutas entre dos paradas desde BD."""
     logger.info(f"API call: plan_route from '{from_stop}' to '{to_stop}'")
     
     if not from_stop.strip() or not to_stop.strip():
         raise HTTPException(status_code=400, detail="Se requieren tanto from_stop como to_stop")
     
     try:
-        routes = service.find_routes(from_stop, to_stop, limit)
+        # Generate stop IDs
+        from_stop_id = from_stop.lower().replace(" ", "-").replace("'", "")
+        to_stop_id = to_stop.lower().replace(" ", "-").replace("'", "")
+        
+        # Use db_service to find routes
+        routes = db_service.plan_route(db, from_stop_id, to_stop_id, limit)
+        
+        # Convert to old format
+        formatted_routes = []
+        for route_data in routes:
+            formatted_routes.append({
+                "line_id": route_data["route"].id,
+                "line_name": route_data["route"].name,
+                "from_stop": from_stop,
+                "to_stop": to_stop,
+                "departure_time": route_data["from_time"],
+                "arrival_time": route_data["to_time"],
+                "transfers": 0
+            })
+        
         return JSONResponse(content={
             "from_stop": from_stop,
             "to_stop": to_stop,
-            "routes": routes,
-            "count": len(routes)
+            "routes": formatted_routes,
+            "count": len(formatted_routes)
         })
     except Exception as e:
         logger.error(f"Error planning route: {e}")
@@ -507,8 +646,23 @@ def get_nearby_stops(
 # Service Information Endpoints
 
 @app.get("/alerts", tags=["Service"])
-def get_alerts(line_id: str = Query(None, description="Filtrar por ID de línea")):
-    """Obtener alertas de servicio."""
+def get_alerts(
+    line_id: str = Query(None, description="Filtrar por ID de línea"),
+    db: Session = Depends(get_db)
+):
+    """Obtener alertas de servicio desde BD."""
+    logger.info(f"API call: get_alerts for line {line_id}")
+    
+    try:
+        alerts = db_service.get_alerts(db, line_id)
+        return JSONResponse(content={
+            "alerts": alerts,
+            "count": len(alerts),
+            "filtered_by_line": line_id
+        })
+    except Exception as e:
+        logger.error(f"Error getting alerts: {e}")
+        raise HTTPException(status_code=500, detail=f"Error obteniendo alertas: {str(e)}")
     logger.info(f"API call: get_alerts for line {line_id}")
     
     try:
