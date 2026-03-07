@@ -44,7 +44,9 @@ def log(message: str, color: str = None):
 
 def generate_stop_id(stop_name: str) -> str:
     """Generate consistent ID from stop name."""
-    return stop_name.lower().replace(" ", "-").replace("'", "")
+    # Clean stop name: remove newlines, extra spaces
+    clean_name = stop_name.replace("\n", " ").replace("  ", " ").strip()
+    return clean_name.lower().replace(" ", "-").replace("'", "")
 
 
 def generate_color(route_id: str) -> str:
@@ -327,8 +329,27 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                 departures_to_add = []
                                 for trip in schedule_data.get("trips", []):
                                     for stop_data in trip.get("stops", []):
-                                        stop_name = stop_data["stop"]
+                                        # Clean stop name (remove newlines, extra spaces)
+                                        stop_name = stop_data["stop"].replace("\n", " ").replace("  ", " ").strip()
                                         stop_id = generate_stop_id(stop_name)
+                                        
+                                        # Ensure stop exists in database (create if missing)
+                                        db_stop = db.query(Stop).filter(Stop.id == stop_id).first()
+                                        if not db_stop:
+                                            # Create missing stop
+                                            coords = STOPS_COORDINATES.get(stop_name, {})
+                                            db_stop = Stop(
+                                                id=stop_id,
+                                                name=stop_name,
+                                                latitude=coords.get("lat"),
+                                                longitude=coords.get("lon"),
+                                                routes=[route_id],
+                                                city="Cosenza",
+                                                region="Calabria"
+                                            )
+                                            db.add(db_stop)
+                                            db.flush()  # Flush to make it available for foreign key
+                                            log(f"      + Created missing stop: {stop_name}", "yellow")
                                         
                                         # Include periodicity in ID to avoid conflicts between periodicities
                                         departure_id = f"{stop_id}-{route_id}-{periodicity_value}-{trip['trip_id']}"
