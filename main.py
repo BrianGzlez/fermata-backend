@@ -234,13 +234,6 @@ def get_structured_timetable(line_id: str, itinerary: str, periodicity: str, db:
         }
         
         return JSONResponse(content=structured_response)
-                "trips_count": len(schedule.get("trips", [])),
-                "stops_count": len(schedule.get("stops", [])),
-                "has_structured_data": len(schedule.get("trips", [])) > 0
-            }
-        }
-        
-        return JSONResponse(content=structured_response)
         
     except HTTPException:
         raise
