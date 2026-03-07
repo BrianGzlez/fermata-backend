@@ -317,7 +317,15 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                     db.add(db_schedule)
                                     synced_schedules += 1
                                 
+                                # Delete old departures for this route/itinerary/periodicity
+                                db.query(Departure).filter(
+                                    Departure.route_id == route_id,
+                                    Departure.itinerary == itinerary_value,
+                                    Departure.periodicity == periodicity_value
+                                ).delete()
+                                
                                 # Save departures for each stop
+                                departures_to_add = []
                                 for trip in schedule_data.get("trips", []):
                                     for stop_data in trip.get("stops", []):
                                         stop_name = stop_data["stop"]
@@ -328,8 +336,8 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                         destination = schedule_data.get("trips", [{}])[-1].get("stops", [{}])[-1].get("stop", "Unknown")
                                         departure_time = stop_data["time"]
                                         
-                                        # Use merge to handle insert or update
-                                        db_departure = db.merge(Departure(
+                                        # Create departure object
+                                        departure = Departure(
                                             id=departure_id,
                                             stop_id=stop_id,
                                             route_id=route_id,
@@ -340,9 +348,13 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                             periodicity=periodicity_value,
                                             itinerary=itinerary_value,
                                             updated_at=datetime.utcnow()
-                                        ))
-                                        
+                                        )
+                                        departures_to_add.append(departure)
                                         synced_departures += 1
+                                
+                                # Bulk insert new departures
+                                if departures_to_add:
+                                    db.bulk_save_objects(departures_to_add)
                                 
                                 log(f"    ✓ {periodicity_value}: {len(schedule_data.get('trips', []))} trips", "green")
                                 
@@ -388,8 +400,14 @@ def main():
     parser.add_argument("--routes", action="store_true", help="Sync only routes")
     parser.add_argument("--schedules", action="store_true", help="Sync only schedules")
     parser.add_argument("--limit", type=int, help="Limit number of routes to sync (for testing)")
+    parser.add_argument("--test", action="store_true", help="Test mode: sync only 2 routes to verify")
     
     args = parser.parse_args()
+    
+    # Test mode overrides limit
+    if args.test:
+        args.limit = 2
+        log("⚠️  TEST MODE: Only syncing 2 routes", "yellow")
     
     # If no specific sync type, sync all
     if not any([args.stops, args.routes, args.schedules]):
@@ -436,6 +454,9 @@ def main():
         
         # Sync schedules
         if args.all or args.schedules:
+            result = sync_schedules(db, service, limit=args.limit)
+            total_synced += result["synced"]
+            all_errors.extend(result["errors"])
             result = sync_schedules(db, service, limit=args.limit)
             total_synced += result["synced"]
             all_errors.extend(result["errors"])
