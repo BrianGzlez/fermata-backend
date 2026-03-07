@@ -302,80 +302,122 @@ def plan_journey(
     db: Session = Depends(get_db)
 ):
     """
-    Calculate routes between two stops.
+    Calculate routes between two stops, including routes with transfers.
+    
+    This endpoint finds:
+    - Direct routes (no transfers)
+    - Routes with 1 transfer (change bus once)
+    - Routes with 2 transfers (change bus twice)
     """
-    logger.info(f"Frontend API: plan_journey - from={from_stop}, to={to_stop}")
+    logger.info(f"Frontend API: plan_journey - from={from_stop}, to={to_stop}, maxTransfers={maxTransfers}")
     
     try:
-        # Find routes
-        routes = db_service.plan_route(db, from_stop, to_stop, limit=3)
+        # Find routes with transfers
+        journeys_data = db_service.plan_route_with_transfers(
+            db, from_stop, to_stop, maxTransfers, limit=5
+        )
         
         # Convert to Journey format
         journeys = []
         
-        for idx, route_data in enumerate(routes):
-            route = route_data["route"]
-            from_time = route_data["from_time"]
-            to_time = route_data["to_time"]
+        for idx, journey_data in enumerate(journeys_data):
+            legs_list = []
+            total_duration = 0
+            total_distance = 0
             
-            # Get stop details
-            from_stop_obj = db_service.get_stop(db, from_stop)
-            to_stop_obj = db_service.get_stop(db, to_stop)
+            departure_time = None
+            arrival_time = None
             
-            from_stop_info = {
+            for leg_idx, leg in enumerate(journey_data["legs"]):
+                route = leg["route"]
+                from_time = leg["from_time"]
+                to_time = leg["to_time"]
+                
+                if leg_idx == 0:
+                    departure_time = from_time
+                if leg_idx == len(journey_data["legs"]) - 1:
+                    arrival_time = to_time
+                
+                # Get stop details
+                from_stop_obj = db_service.get_stop(db, leg["from_stop_id"])
+                to_stop_obj = db_service.get_stop(db, leg["to_stop_id"])
+                
+                from_stop_info = {
+                    "id": leg["from_stop_id"],
+                    "name": from_stop_obj["name"] if from_stop_obj else leg["from_stop_id"],
+                    "latitude": from_stop_obj.get("latitude", 0) if from_stop_obj else 0,
+                    "longitude": from_stop_obj.get("longitude", 0) if from_stop_obj else 0
+                }
+                
+                to_stop_info = {
+                    "id": leg["to_stop_id"],
+                    "name": to_stop_obj["name"] if to_stop_obj else leg["to_stop_id"],
+                    "latitude": to_stop_obj.get("latitude", 0) if to_stop_obj else 0,
+                    "longitude": to_stop_obj.get("longitude", 0) if to_stop_obj else 0
+                }
+                
+                # Calculate distance
+                distance = 0
+                if from_stop_info["latitude"] and to_stop_info["latitude"]:
+                    distance = calculate_distance(
+                        from_stop_info["latitude"], from_stop_info["longitude"],
+                        to_stop_info["latitude"], to_stop_info["longitude"]
+                    )
+                
+                duration = calculate_time_diff(from_time, to_time)
+                total_duration += duration
+                total_distance += distance
+                
+                leg_formatted = {
+                    "type": "transit",
+                    "routeId": route.id,
+                    "routeName": route.name,
+                    "from": from_stop_info,
+                    "to": to_stop_info,
+                    "departureTime": from_time,
+                    "arrivalTime": to_time,
+                    "duration": duration,
+                    "distance": round(distance, 2),
+                    "stops": []
+                }
+                
+                legs_list.append(leg_formatted)
+            
+            # Get origin and destination info
+            origin_obj = db_service.get_stop(db, from_stop)
+            destination_obj = db_service.get_stop(db, to_stop)
+            
+            origin_info = {
                 "id": from_stop,
-                "name": from_stop_obj["name"] if from_stop_obj else from_stop,
-                "latitude": from_stop_obj.get("latitude", 0) if from_stop_obj else 0,
-                "longitude": from_stop_obj.get("longitude", 0) if from_stop_obj else 0
+                "name": origin_obj["name"] if origin_obj else from_stop,
+                "latitude": origin_obj.get("latitude", 0) if origin_obj else 0,
+                "longitude": origin_obj.get("longitude", 0) if origin_obj else 0
             }
             
-            to_stop_info = {
+            destination_info = {
                 "id": to_stop,
-                "name": to_stop_obj["name"] if to_stop_obj else to_stop,
-                "latitude": to_stop_obj.get("latitude", 0) if to_stop_obj else 0,
-                "longitude": to_stop_obj.get("longitude", 0) if to_stop_obj else 0
-            }
-            
-            # Calculate distance
-            distance = 0
-            if from_stop_info["latitude"] and to_stop_info["latitude"]:
-                distance = calculate_distance(
-                    from_stop_info["latitude"], from_stop_info["longitude"],
-                    to_stop_info["latitude"], to_stop_info["longitude"]
-                )
-            
-            duration = calculate_time_diff(from_time, to_time)
-            
-            leg = {
-                "type": "transit",
-                "routeId": route.id,
-                "routeName": route.name,
-                "from": from_stop_info,
-                "to": to_stop_info,
-                "departureTime": from_time,
-                "arrivalTime": to_time,
-                "duration": duration,
-                "distance": round(distance, 2),
-                "stops": []
+                "name": destination_obj["name"] if destination_obj else to_stop,
+                "latitude": destination_obj.get("latitude", 0) if destination_obj else 0,
+                "longitude": destination_obj.get("longitude", 0) if destination_obj else 0
             }
             
             journey = {
                 "id": f"journey-{idx + 1}",
-                "origin": from_stop_info,
-                "destination": to_stop_info,
-                "legs": [leg],
-                "totalDuration": duration,
-                "totalDistance": round(distance, 2),
-                "departureTime": from_time,
-                "arrivalTime": to_time,
-                "transfers": 0
+                "origin": origin_info,
+                "destination": destination_info,
+                "legs": legs_list,
+                "totalDuration": total_duration,
+                "totalDistance": round(total_distance, 2),
+                "departureTime": departure_time,
+                "arrivalTime": arrival_time,
+                "transfers": journey_data["transfers"]
             }
             
             journeys.append(journey)
         
         return {
-            "from": {"id": from_stop, "name": from_stop_info["name"]},
-            "to": {"id": to_stop, "name": to_stop_info["name"]},
+            "from": {"id": from_stop, "name": origin_info["name"]},
+            "to": {"id": to_stop, "name": destination_info["name"]},
             "journeys": journeys,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }

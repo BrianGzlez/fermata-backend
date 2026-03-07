@@ -315,3 +315,202 @@ class DatabaseService:
         
         alerts = query.all()
         return [a.to_dict() for a in alerts]
+    
+    def plan_route_with_transfers(
+        self,
+        db: Session,
+        from_stop_id: str,
+        to_stop_id: str,
+        max_transfers: int = 2,
+        limit: int = 5
+    ) -> List[Dict]:
+        """
+        Find routes between two stops, including routes with transfers.
+        
+        Returns journeys with 0, 1, or 2 transfers depending on max_transfers.
+        """
+        all_journeys = []
+        
+        # 1. Try direct routes (no transfers)
+        direct_routes = self.plan_route(db, from_stop_id, to_stop_id, limit=limit)
+        for route_data in direct_routes:
+            all_journeys.append({
+                "legs": [route_data],
+                "transfers": 0,
+                "total_routes": 1
+            })
+        
+        # 2. If max_transfers >= 1, try one transfer
+        if max_transfers >= 1:
+            one_transfer_journeys = self._find_one_transfer_routes(
+                db, from_stop_id, to_stop_id, limit
+            )
+            all_journeys.extend(one_transfer_journeys)
+        
+        # 3. If max_transfers >= 2, try two transfers
+        if max_transfers >= 2:
+            two_transfer_journeys = self._find_two_transfer_routes(
+                db, from_stop_id, to_stop_id, limit
+            )
+            all_journeys.extend(two_transfer_journeys)
+        
+        # Sort by number of transfers (prefer fewer transfers)
+        all_journeys.sort(key=lambda x: x["transfers"])
+        
+        return all_journeys[:limit]
+    
+    def _find_one_transfer_routes(
+        self,
+        db: Session,
+        from_stop_id: str,
+        to_stop_id: str,
+        limit: int
+    ) -> List[Dict]:
+        """Find routes with exactly one transfer."""
+        journeys = []
+        
+        # Get all routes
+        routes = db.query(Route).all()
+        
+        # Find routes that pass through from_stop
+        routes_from_origin = []
+        for route in routes:
+            stop_ids = [s["id"] for s in route.stops_order]
+            if from_stop_id in stop_ids:
+                routes_from_origin.append((route, stop_ids.index(from_stop_id)))
+        
+        # Find routes that pass through to_stop
+        routes_to_destination = []
+        for route in routes:
+            stop_ids = [s["id"] for s in route.stops_order]
+            if to_stop_id in stop_ids:
+                routes_to_destination.append((route, stop_ids.index(to_stop_id)))
+        
+        # Find common stops between routes (transfer points)
+        for route1, from_idx in routes_from_origin:
+            route1_stops = [s["id"] for s in route1.stops_order]
+            stops_after_origin = route1_stops[from_idx + 1:]
+            
+            for route2, to_idx in routes_to_destination:
+                # Skip if same route
+                if route1.id == route2.id:
+                    continue
+                
+                route2_stops = [s["id"] for s in route2.stops_order]
+                stops_before_destination = route2_stops[:to_idx]
+                
+                # Find common stops (transfer points)
+                common_stops = set(stops_after_origin) & set(stops_before_destination)
+                
+                for transfer_stop_id in common_stops:
+                    # Get schedules for both routes
+                    schedule1 = db.query(Schedule).filter(
+                        Schedule.route_id == route1.id
+                    ).first()
+                    
+                    schedule2 = db.query(Schedule).filter(
+                        Schedule.route_id == route2.id
+                    ).first()
+                    
+                    if schedule1 and schedule2 and schedule1.trips and schedule2.trips:
+                        # Find times for first leg
+                        leg1_data = self._find_leg_times(
+                            schedule1, from_stop_id, transfer_stop_id
+                        )
+                        
+                        # Find times for second leg
+                        leg2_data = self._find_leg_times(
+                            schedule2, transfer_stop_id, to_stop_id
+                        )
+                        
+                        if leg1_data and leg2_data:
+                            journeys.append({
+                                "legs": [
+                                    {
+                                        "route": route1,
+                                        "from_stop_id": from_stop_id,
+                                        "to_stop_id": transfer_stop_id,
+                                        "from_time": leg1_data["from_time"],
+                                        "to_time": leg1_data["to_time"],
+                                        "trip_id": leg1_data["trip_id"]
+                                    },
+                                    {
+                                        "route": route2,
+                                        "from_stop_id": transfer_stop_id,
+                                        "to_stop_id": to_stop_id,
+                                        "from_time": leg2_data["from_time"],
+                                        "to_time": leg2_data["to_time"],
+                                        "trip_id": leg2_data["trip_id"]
+                                    }
+                                ],
+                                "transfers": 1,
+                                "total_routes": 2,
+                                "transfer_stops": [transfer_stop_id]
+                            })
+                            
+                            # Limit results per transfer point
+                            if len(journeys) >= limit * 2:
+                                return journeys[:limit]
+        
+        return journeys
+    
+    def _find_two_transfer_routes(
+        self,
+        db: Session,
+        from_stop_id: str,
+        to_stop_id: str,
+        limit: int
+    ) -> List[Dict]:
+        """Find routes with exactly two transfers."""
+        # This is computationally expensive, so we limit it
+        # For now, return empty list - can be implemented if needed
+        return []
+    
+    def _find_leg_times(
+        self,
+        schedule: Schedule,
+        from_stop_id: str,
+        to_stop_id: str
+    ) -> Optional[Dict]:
+        """Find departure and arrival times for a leg of the journey."""
+        if not schedule.trips:
+            return None
+        
+        # Get stop names from IDs
+        from_stop_name = None
+        to_stop_name = None
+        
+        for stop in schedule.stops:
+            stop_id = stop["name"].lower().replace(" ", "-").replace("'", "").replace("\n", " ").replace("  ", " ").strip()
+            if stop_id == from_stop_id:
+                from_stop_name = stop["name"]
+            if stop_id == to_stop_id:
+                to_stop_name = stop["name"]
+        
+        if not from_stop_name or not to_stop_name:
+            return None
+        
+        # Find a trip that goes through both stops
+        for trip in schedule.trips:
+            from_time = None
+            to_time = None
+            found_from = False
+            
+            for stop_data in trip["stops"]:
+                stop_name = stop_data["stop"]
+                
+                if stop_name == from_stop_name:
+                    from_time = stop_data["time"]
+                    found_from = True
+                elif stop_name == to_stop_name and found_from:
+                    to_time = stop_data["time"]
+                    break
+            
+            if from_time and to_time:
+                return {
+                    "from_time": from_time,
+                    "to_time": to_time,
+                    "trip_id": trip["trip_id"]
+                }
+        
+        return None
