@@ -209,88 +209,6 @@ def get_all_routes(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/routes/{route_id}")
-def get_route_details(route_id: str, db: Session = Depends(get_db)):
-    """
-    Get detailed information about a specific route/line.
-    """
-    logger.info(f"Frontend API: get_route_details - {route_id}")
-    
-    try:
-        route_data = db_service.get_route(db, route_id)
-        
-        if not route_data:
-            raise HTTPException(status_code=404, detail=f"Route '{route_id}' not found")
-        
-        # Extract stops in order
-        stops_list = []
-        for idx, stop in enumerate(route_data.get("stops", [])):
-            stop_data = {
-                "id": stop["id"],
-                "name": stop["name"],
-                "order": idx
-            }
-            stops_list.append(stop_data)
-        
-        route = _route_to_frontend_format(
-            {"value": route_data["id"], "label": route_data["name"]},
-            route_data.get("stops", [])
-        )
-        route["stops"] = stops_list
-        return route
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting route details: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/routes/{route_id}/schedule")
-def get_route_schedule(
-    route_id: str,
-    date: str = Query(None, description="Date in YYYY-MM-DD format"),
-    stopId: str = Query(None, description="Filter by specific stop"),
-    db: Session = Depends(get_db)
-):
-    """
-    Get schedule for a specific route on a given date.
-    Returns 200 with empty schedules array if no data found.
-    """
-    logger.info(f"Frontend API: get_route_schedule - {route_id}, date={date}, stopId={stopId}")
-    
-    # Parse date
-    target_date = None
-    if date:
-        try:
-            target_date = datetime.strptime(date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-    else:
-        target_date = datetime.now().date()
-    
-    try:
-        schedule = db_service.get_route_schedule(db, route_id, target_date, stopId)
-        
-        if not schedule:
-            # Return empty schedule instead of 404
-            route_data = db_service.get_route(db, route_id)
-            route_name = route_data["name"] if route_data else f"Línea {route_id}"
-            
-            return {
-                "routeId": route_id,
-                "routeName": route_name,
-                "date": target_date.isoformat(),
-                "schedules": []
-            }
-        
-        return schedule
-        
-    except Exception as e:
-        logger.error(f"Error getting route schedule: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/routes/plan")
 def plan_journey(
     from_stop: str = Query(..., alias="from", description="Origin stop ID"),
@@ -425,6 +343,90 @@ def plan_journey(
     except Exception as e:
         logger.error(f"Error planning journey: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/routes/{route_id}")
+def get_route_details(route_id: str, db: Session = Depends(get_db)):
+    """
+    Get detailed information about a specific route/line.
+    """
+    logger.info(f"Frontend API: get_route_details - {route_id}")
+    
+    try:
+        route_data = db_service.get_route(db, route_id)
+        
+        if not route_data:
+            raise HTTPException(status_code=404, detail=f"Route '{route_id}' not found")
+        
+        # Extract stops in order
+        stops_list = []
+        for idx, stop in enumerate(route_data.get("stops", [])):
+            stop_data = {
+                "id": stop["id"],
+                "name": stop["name"],
+                "order": idx
+            }
+            stops_list.append(stop_data)
+        
+        route = _route_to_frontend_format(
+            {"value": route_data["id"], "label": route_data["name"]},
+            route_data.get("stops", [])
+        )
+        route["stops"] = stops_list
+        return route
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting route details: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/routes/{route_id}/schedule")
+def get_route_schedule(
+    route_id: str,
+    date: str = Query(None, description="Date in YYYY-MM-DD format"),
+    stopId: str = Query(None, description="Filter by specific stop"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get schedule for a specific route on a given date.
+    Returns 200 with empty schedules array if no data found.
+    """
+    logger.info(f"Frontend API: get_route_schedule - {route_id}, date={date}, stopId={stopId}")
+    
+    # Parse date
+    target_date = None
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    else:
+        target_date = datetime.now().date()
+    
+    try:
+        schedule = db_service.get_route_schedule(db, route_id, target_date, stopId)
+        
+        if not schedule:
+            # Return empty schedule instead of 404
+            route_data = db_service.get_route(db, route_id)
+            route_name = route_data["name"] if route_data else f"Línea {route_id}"
+            
+            return {
+                "routeId": route_id,
+                "routeName": route_name,
+                "date": target_date.isoformat(),
+                "schedules": []
+            }
+        
+        return schedule
+        
+    except Exception as e:
+        logger.error(f"Error getting route schedule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 
 # ---------------------------------------------------------------------------
