@@ -20,7 +20,6 @@ from src.config import STOPS_COORDINATES
 from src.frontend_api import router as frontend_router
 from src.database import init_db, get_db
 from src.db_service import DatabaseService
-from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +53,6 @@ app.add_middleware(
 
 # Include frontend-compatible API router
 app.include_router(frontend_router)
-
-# Initialize service
-service = ConsorzioService()
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +143,6 @@ def list_periodicities(line_id: str, itinerary: str, db: Session = Depends(get_d
                 "label": periodicity_labels.get(schedule.periodicity, schedule.periodicity)
             })
     
-    return JSONResponse(content=periodicities)
     if not periodicities:
         raise HTTPException(status_code=404, detail="Periodicidades no encontradas para la combinación especificada.")
     
@@ -331,47 +326,6 @@ def get_stop_departures(
     except Exception as e:
         logger.error(f"Error getting departures: {e}")
         raise HTTPException(status_code=500, detail=f"Error obteniendo salidas: {str(e)}")
-
-
-
-
-@app.get("/schedule-smart/{line_id}/{itinerary}", tags=["Core"])
-def get_smart_timetable(
-    line_id: str, 
-    itinerary: str,
-    date: str = Query(None, description="Fecha en formato YYYY-MM-DD (por defecto: hoy)")
-):
-    """Obtener horario con periodicidad automática según la fecha."""
-    logger.info(f"API call: get_smart_timetable for line {line_id}, itinerary {itinerary} on date {date}")
-    
-    # Parse target date
-    target_date = None
-    if date:
-        try:
-            from datetime import datetime
-            target_date = datetime.strptime(date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD")
-    
-    # Validate inputs
-    try:
-        request_data = ScheduleRequest(
-            line_id=line_id,
-            itinerary=itinerary,
-            periodicity="AUTO"  # Will be determined automatically
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Datos de entrada inválidos: {e}")
-    
-    try:
-        schedule = service.get_current_schedule(request_data.line_id, request_data.itinerary, target_date)
-        return JSONResponse(content=schedule)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting smart schedule: {e}")
-        raise HTTPException(status_code=500, detail=f"Error obteniendo horario: {str(e)}")
 
 
 @app.get("/periodicity/current", tags=["Core"])
@@ -626,18 +580,6 @@ def get_alerts(
     
     try:
         alerts = db_service.get_alerts(db, line_id)
-        return JSONResponse(content={
-            "alerts": alerts,
-            "count": len(alerts),
-            "filtered_by_line": line_id
-        })
-    except Exception as e:
-        logger.error(f"Error getting alerts: {e}")
-        raise HTTPException(status_code=500, detail=f"Error obteniendo alertas: {str(e)}")
-    logger.info(f"API call: get_alerts for line {line_id}")
-    
-    try:
-        alerts = service.get_service_alerts(line_id)
         return JSONResponse(content={
             "alerts": alerts,
             "count": len(alerts),

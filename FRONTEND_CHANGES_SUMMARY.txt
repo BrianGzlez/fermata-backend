@@ -108,3 +108,76 @@ Si hay problemas o preguntas sobre los endpoints, revisar:
 - GUIA_COMPLETA_INTEGRACION.md - Guía completa de integración
 - API_SPECIFICATION.md - Especificación de API
 - /docs - Documentación interactiva de Swagger
+
+
+🚌 NUEVO ENDPOINT: Planificación con Transbordos
+Endpoint: GET /api/routes/plan
+
+Parámetros:
+
+from - ID de parada de origen (requerido)
+to - ID de parada de destino (requerido)
+maxTransfers - Máximo número de transbordos (default: 2)
+time - Hora deseada (opcional)
+arriveBy - Si true, time es hora de llegada (opcional)
+Ejemplo de uso:
+
+GET /api/routes/plan?from=rende-roges&to=cosenza-autostazione&maxTransfers=1
+Respuesta incluye:
+
+{
+  "from": {"id": "...", "name": "..."},
+  "to": {"id": "...", "name": "..."},
+  "journeys": [
+    {
+      "id": "journey-1",
+      "origin": {...},
+      "destination": {...},
+      "legs": [
+        {
+          "type": "transit",
+          "routeId": "135",
+          "routeName": "...",
+          "from": {"id": "A", "name": "Parada A"},
+          "to": {"id": "B", "name": "Parada B"},
+          "departureTime": "07:00",
+          "arrivalTime": "07:15",
+          "duration": 15,
+          "distance": 2.5
+        },
+        {
+          "type": "transit",
+          "routeId": "136",
+          "routeName": "...",
+          "from": {"id": "B", "name": "Parada B"},
+          "to": {"id": "C", "name": "Parada C"},
+          "departureTime": "07:20",
+          "arrivalTime": "07:35",
+          "duration": 15,
+          "distance": 3.0
+        }
+      ],
+      "totalDuration": 35,
+      "totalDistance": 5.5,
+      "departureTime": "07:00",
+      "arrivalTime": "07:35",
+      "transfers": 1
+    }
+  ]
+}
+Cómo funciona:
+
+Sin transbordos (transfers: 0) - Busca rutas directas de A a C
+Con 1 transbordo (transfers: 1) - Busca:
+Ruta 1: A → B (parada de transbordo)
+Ruta 2: B → C
+Con 2 transbordos (transfers: 2) - Busca:
+Ruta 1: A → B
+Ruta 2: B → C
+Ruta 3: C → D
+Características:
+
+Ordena resultados por número de transbordos (prefiere rutas directas)
+Calcula tiempos y distancias totales
+Identifica paradas de transbordo automáticamente
+Limita resultados a 5 mejores opciones
