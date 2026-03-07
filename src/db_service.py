@@ -403,6 +403,94 @@ class DatabaseService:
         alerts = query.all()
         return [a.to_dict() for a in alerts]
     
+    def get_direct_routes(
+        self,
+        db: Session,
+        from_stop_id: str,
+        to_stop_id: str,
+        limit: int = 20,
+        time_window: int = 60
+    ) -> List[Dict]:
+        """
+        Get direct routes between two stops (no transfers).
+        
+        Returns departures where the route passes through both stops
+        in the correct order (from_stop before to_stop).
+        """
+        from datetime import datetime, timedelta
+        
+        # Get current time
+        now = datetime.now()
+        current_time = now.strftime("%H:%M")
+        end_time = (now + timedelta(minutes=time_window)).strftime("%H:%M")
+        
+        # Get all routes
+        routes = db.query(Route).all()
+        
+        results = []
+        
+        for route in routes:
+            # Check if both stops are in this route
+            stop_ids = [s["id"] for s in route.stops_order]
+            
+            # Find indices with normalization
+            from_idx = None
+            to_idx = None
+            
+            for i, stop_id in enumerate(stop_ids):
+                if stop_id == from_stop_id or stop_id == f"*{from_stop_id}" or (from_stop_id.startswith("*") and stop_id == from_stop_id[1:]):
+                    from_idx = i
+                if stop_id == to_stop_id or stop_id == f"*{to_stop_id}" or (to_stop_id.startswith("*") and stop_id == to_stop_id[1:]):
+                    to_idx = i
+            
+            # Only if both stops found and from comes before to
+            if from_idx is not None and to_idx is not None and from_idx < to_idx:
+                # Get schedules for this route
+                schedules = db.query(Schedule).filter(
+                    Schedule.route_id == route.id
+                ).all()
+                
+                for schedule in schedules:
+                    if not schedule.trips:
+                        continue
+                    
+                    # Find trips that go through both stops
+                    for trip in schedule.trips:
+                        from_time = None
+                        to_time = None
+                        
+                        for stop_data in trip["stops"]:
+                            stop_name = stop_data["stop"]
+                            stop_id_clean = stop_name.lower().replace(" ", "-").replace("'", "").replace("\n", " ").replace("  ", " ").strip()
+                            
+                            if stop_id_clean == from_stop_id or stop_id_clean == f"*{from_stop_id}" or (from_stop_id.startswith("*") and stop_id_clean == from_stop_id[1:]):
+                                from_time = stop_data["time"]
+                            elif stop_id_clean == to_stop_id or stop_id_clean == f"*{to_stop_id}" or (to_stop_id.startswith("*") and stop_id_clean == to_stop_id[1:]):
+                                if from_time:  # Only if we already found from_time
+                                    to_time = stop_data["time"]
+                                    break
+                        
+                        if from_time and to_time:
+                            # Check if within time window
+                            if from_time >= current_time and from_time <= end_time:
+                                results.append({
+                                    "route_id": route.id,
+                                    "route_name": route.name,
+                                    "trip_id": trip["trip_id"],
+                                    "periodicity": schedule.periodicity,
+                                    "from_time": from_time,
+                                    "to_time": to_time,
+                                    "from_index": from_idx,
+                                    "to_index": to_idx,
+                                    "total_stops": len(route.stops_order),
+                                    "destination": schedule.stops[-1]["name"] if schedule.stops else ""
+                                })
+        
+        # Sort by departure time
+        results.sort(key=lambda x: x["from_time"])
+        
+        return results[:limit]
+    
     def plan_route_with_transfers(
         self,
         db: Session,

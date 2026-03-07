@@ -495,3 +495,82 @@ def normalize_stop_id(stop_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error normalizing stop ID: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/routes/direct")
+def get_direct_routes(
+    from_stop: str = Query(..., alias="from", description="Origin stop ID"),
+    to_stop: str = Query(..., alias="to", description="Destination stop ID"),
+    limit: int = Query(20, description="Maximum number of departures"),
+    timeWindow: int = Query(60, description="Time window in minutes"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get direct routes between two stops (no transfers required).
+    
+    Only returns departures where the route passes through both stops
+    in the correct order (from → to).
+    """
+    logger.info(f"Frontend API: get_direct_routes - from={from_stop}, to={to_stop}")
+    
+    try:
+        # Get stop info
+        from_stop_obj = db_service.get_stop(db, from_stop)
+        to_stop_obj = db_service.get_stop(db, to_stop)
+        
+        if not from_stop_obj:
+            raise HTTPException(status_code=404, detail=f"Origin stop '{from_stop}' not found")
+        if not to_stop_obj:
+            raise HTTPException(status_code=404, detail=f"Destination stop '{to_stop}' not found")
+        
+        # Get direct routes
+        direct_routes = db_service.get_direct_routes(
+            db, 
+            from_stop_obj["id"],  # Use normalized ID
+            to_stop_obj["id"],    # Use normalized ID
+            limit,
+            timeWindow
+        )
+        
+        # Convert to frontend format
+        departures = []
+        for route_data in direct_routes:
+            departure = {
+                "id": f"{route_data['route_id']}-{route_data['trip_id']}-{route_data['from_time']}",
+                "routeId": route_data["route_id"],
+                "routeName": route_data["route_name"],
+                "destination": route_data["destination"],
+                "departureTime": route_data["from_time"],
+                "arrivalTime": route_data["to_time"],
+                "status": "on-time",
+                "delay": 0,
+                "periodicity": route_data["periodicity"],
+                "stopSequence": {
+                    "fromIndex": route_data["from_index"],
+                    "toIndex": route_data["to_index"],
+                    "totalStops": route_data["total_stops"],
+                    "intermediateStops": route_data["to_index"] - route_data["from_index"] - 1
+                },
+                "estimatedDuration": calculate_time_diff(route_data["from_time"], route_data["to_time"])
+            }
+            departures.append(departure)
+        
+        return {
+            "from": {
+                "id": from_stop_obj["id"],
+                "name": from_stop_obj["name"]
+            },
+            "to": {
+                "id": to_stop_obj["id"],
+                "name": to_stop_obj["name"]
+            },
+            "departures": departures,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "count": len(departures)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting direct routes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
