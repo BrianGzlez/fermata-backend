@@ -118,14 +118,19 @@ class DatabaseService:
             is_weekend = now.weekday() >= 5
             month = now.month
             
+            # Priority order for periodicity selection
             if is_weekend:
-                periodicity = "FEST"
+                # Weekends: try F (Feriale) first, then DF, then any
+                periodicity = "F"
             elif month == 8:
+                # August: try EST, then NS, then F
                 periodicity = "EST"
             elif month >= 9 or month <= 6:
-                periodicity = "SCO"
+                # School period: try S, then F
+                periodicity = "S"
             else:
-                periodicity = "F"
+                # Non-school period: try NS, then F
+                periodicity = "NS"
         
         # Try with preferred periodicity first
         query = base_query.filter(Departure.periodicity == periodicity)
@@ -200,8 +205,8 @@ class DatabaseService:
         
         # Priority order for periodicity
         if is_weekend:
-            # Weekends and holidays
-            periodicity_priority = ["FEST", "Fest", "F", "Fer"]
+            # Weekends and holidays - use F (Feriale) as FEST doesn't exist in data
+            periodicity_priority = ["F", "Fer", "DF", "NS"]
         elif month == 8:
             # August (summer)
             periodicity_priority = ["EST", "Est", "Non Scol", "F", "Fer"]
