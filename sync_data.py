@@ -330,7 +330,8 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                         stop_name = stop_data["stop"]
                                         stop_id = generate_stop_id(stop_name)
                                         
-                                        departure_id = f"{stop_id}-{route_id}-{trip['trip_id']}"
+                                        # Include periodicity in ID to avoid conflicts between periodicities
+                                        departure_id = f"{stop_id}-{route_id}-{periodicity_value}-{trip['trip_id']}"
                                         
                                         destination = schedule_data.get("trips", [{}])[-1].get("stops", [{}])[-1].get("stop", "Unknown")
                                         departure_time = stop_data["time"]
