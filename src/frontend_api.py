@@ -39,13 +39,13 @@ def _stop_to_frontend_format(stop_info: Dict, stop_name: str = None) -> Dict:
     coords = stop_info.get("coordinates") or STOPS_COORDINATES.get(stop_name, {})
     
     return {
-        "id": _generate_stop_id(stop_name),
+        "id": stop_info.get("id", _generate_stop_id(stop_name)),
         "name": stop_name,
-        "latitude": coords.get("lat", 0.0),
-        "longitude": coords.get("lon", 0.0),
-        "routes": list(stop_info.get("lines", [])),
-        "city": "Cosenza",
-        "region": "Calabria"
+        "latitude": stop_info.get("latitude") or coords.get("lat", 0.0),
+        "longitude": stop_info.get("longitude") or coords.get("lon", 0.0),
+        "routes": stop_info.get("routes", []),
+        "city": stop_info.get("city", "Cosenza"),
+        "region": stop_info.get("region", "Calabria")
     }
 
 

@@ -20,7 +20,7 @@ print("-" * 80)
 from_stop = "*cosenza-(autostazione)"
 to_stop = "*rende-(roges-via-crati-n.c.12)"
 
-url = f"{BASE_URL}/api/routes/direct?from={from_stop}&to={to_stop}&limit=10&timeWindow=1440"
+url = f"{BASE_URL}/api/direct-routes?from={from_stop}&to={to_stop}&limit=10&timeWindow=1440"
 print(f"URL: {url}\n")
 
 try:
@@ -63,7 +63,7 @@ print("-" * 80)
 from_stop_no_asterisk = "cosenza-(autostazione)"
 to_stop_no_asterisk = "rende-(roges-via-crati-n.c.12)"
 
-url = f"{BASE_URL}/api/routes/direct?from={from_stop_no_asterisk}&to={to_stop_no_asterisk}&limit=5"
+url = f"{BASE_URL}/api/direct-routes?from={from_stop_no_asterisk}&to={to_stop_no_asterisk}&limit=5"
 print(f"URL: {url}\n")
 
 try:
