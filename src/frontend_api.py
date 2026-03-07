@@ -497,7 +497,7 @@ def normalize_stop_id(stop_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/routes/direct")
+@router.get("/direct-routes")
 def get_direct_routes(
     from_stop: str = Query(..., alias="from", description="Origin stop ID"),
     to_stop: str = Query(..., alias="to", description="Destination stop ID"),
