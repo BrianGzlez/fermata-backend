@@ -104,7 +104,7 @@ class DatabaseService:
         from datetime import datetime, time as dt_time
         
         # Normalize stop_id - try with and without asterisk
-        query = db.query(Departure).filter(
+        base_query = db.query(Departure).filter(
             or_(
                 Departure.stop_id == stop_id,
                 Departure.stop_id == f"*{stop_id}",
@@ -127,8 +127,8 @@ class DatabaseService:
             else:
                 periodicity = "F"
         
-        if periodicity:
-            query = query.filter(Departure.periodicity == periodicity)
+        # Try with preferred periodicity first
+        query = base_query.filter(Departure.periodicity == periodicity)
         
         # Handle late night (after 11 PM) - show tomorrow's early morning buses
         if after_time:
@@ -144,6 +144,24 @@ class DatabaseService:
                 query = query.filter(Departure.departure_time >= after_time)
         
         departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
+        
+        # If no departures found after current time, get first departures of the day
+        if not departures and after_time:
+            query = base_query.filter(Departure.periodicity == periodicity)
+            departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
+        
+        # If still no departures with preferred periodicity, try "F" (Feriale) as fallback
+        if not departures:
+            query = base_query.filter(Departure.periodicity == "F")
+            if after_time:
+                current_hour = int(after_time.split(":")[0])
+                if current_hour < 23:
+                    query = query.filter(Departure.departure_time >= after_time)
+            departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
+        
+        # Last resort: get any departures without time filter
+        if not departures:
+            departures = base_query.order_by(Departure.departure_time).limit(limit * 2).all()
         
         # Convert to dict and sort by time
         results = [d.to_dict() for d in departures]
