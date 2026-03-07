@@ -316,12 +316,12 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                     synced_schedules += 1
                                 
                                 # Delete old departures for this route/itinerary/periodicity
-                                db.query(Departure).filter(
+                                deleted_count = db.query(Departure).filter(
                                     Departure.route_id == route_id,
                                     Departure.itinerary == itinerary_value,
                                     Departure.periodicity == periodicity_value
-                                ).delete()
-                                db.commit()  # Commit delete before insert
+                                ).delete(synchronize_session='fetch')
+                                db.flush()  # Flush delete to database
                                 
                                 # Save departures for each stop
                                 departures_to_add = []
@@ -354,11 +354,15 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                 # Bulk insert new departures
                                 if departures_to_add:
                                     db.bulk_save_objects(departures_to_add)
-                                    db.commit()  # Commit after insert
+                                    db.flush()  # Flush insert to database
                                 
-                                log(f"    ✓ {periodicity_value}: {len(schedule_data.get('trips', []))} trips", "green")
+                                # Commit after each periodicity to avoid losing work
+                                db.commit()
+                                
+                                log(f"    ✓ {periodicity_value}: {len(schedule_data.get('trips', []))} trips, {len(departures_to_add)} departures", "green")
                                 
                             except Exception as e:
+                                db.rollback()  # Rollback on error to reset session
                                 errors.append(f"Error syncing schedule {route_id}/{itinerary_value}/{periodicity_value}: {str(e)}")
                                 log(f"    ❌ {periodicity_value}: {str(e)}", "red")
                     
