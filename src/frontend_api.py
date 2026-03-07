@@ -175,6 +175,17 @@ def get_stop_departures(
             after_time=current_time
         )
         
+        # Check if we're showing next day's buses
+        next_day = False
+        if departures_data:
+            first_dep_time = departures_data[0]["departureTime"]
+            dep_hour = int(first_dep_time.split(":")[0])
+            current_hour = now_italy.hour
+            
+            # If first departure is early morning (06:00-09:00) and current time is afternoon/evening
+            if dep_hour >= 6 and dep_hour <= 9 and current_hour >= 14:
+                next_day = True
+        
         # Convert to frontend format
         departures = [_departure_to_frontend_format(dep, stop_id) 
                      for dep in departures_data]
@@ -183,6 +194,7 @@ def get_stop_departures(
             "stopId": stop_id,
             "stopName": stop["name"],
             "departures": departures,
+            "nextDay": next_day,
             "timestamp": now_italy.isoformat()
         }
         
