@@ -333,24 +333,6 @@ def get_stop_departures(
         raise HTTPException(status_code=500, detail=f"Error obteniendo salidas: {str(e)}")
 
 
-@app.get("/schedule-smart/{line_id}/{itinerary}", tags=["Core"])
-        try:
-            from datetime import datetime
-            target_date = datetime.strptime(date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD")
-    
-    try:
-        departures = service.get_next_departures(stop_name, limit, target_date)
-        return JSONResponse(content={
-            "stop_name": stop_name,
-            "target_date": target_date.isoformat() if target_date else datetime.now().date().isoformat(),
-            "departures": departures,
-            "count": len(departures)
-        })
-    except Exception as e:
-        logger.error(f"Error getting departures: {e}")
-        raise HTTPException(status_code=500, detail=f"Error obteniendo salidas: {str(e)}")
 
 
 @app.get("/schedule-smart/{line_id}/{itinerary}", tags=["Core"])

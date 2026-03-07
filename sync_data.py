@@ -207,8 +207,6 @@ def sync_routes(db: Session, service: ConsorzioService) -> dict:
                     )
                     db.add(db_route)
                     synced_routes += 1
-                    db.add(db_route)
-                    synced_routes += 1
                 
                 log(f"  ✓ {route_id}: {line['label']}", "green")
                 
@@ -456,9 +454,6 @@ def main():
         
         # Sync schedules
         if args.all or args.schedules:
-            result = sync_schedules(db, service, limit=args.limit)
-            total_synced += result["synced"]
-            all_errors.extend(result["errors"])
             result = sync_schedules(db, service, limit=args.limit)
             total_synced += result["synced"]
             all_errors.extend(result["errors"])
