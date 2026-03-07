@@ -149,20 +149,23 @@ def get_stop_departures(
     """
     Get next departures from a specific stop.
     Handles late night (after 11 PM) by showing tomorrow's early buses.
+    Uses Italy timezone (Europe/Rome) for current time.
     """
     logger.info(f"Frontend API: get_stop_departures - {stop_id}")
     
     try:
         from datetime import datetime
+        import pytz
         
         # Get stop info
         stop = db_service.get_stop(db, stop_id)
         if not stop:
             raise HTTPException(status_code=404, detail=f"Stop '{stop_id}' not found")
         
-        # Get current time to handle late night
-        now = datetime.now()
-        current_time = now.strftime("%H:%M")
+        # Get current time in Italy timezone (Europe/Rome)
+        italy_tz = pytz.timezone('Europe/Rome')
+        now_italy = datetime.now(italy_tz)
+        current_time = now_italy.strftime("%H:%M")
         
         # Get departures (handles late night automatically)
         departures_data = db_service.get_departures(
@@ -180,7 +183,7 @@ def get_stop_departures(
             "stopId": stop_id,
             "stopName": stop["name"],
             "departures": departures,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "timestamp": now_italy.isoformat()
         }
         
     except Exception as e:

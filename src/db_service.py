@@ -418,12 +418,17 @@ class DatabaseService:
         in the correct order (from_stop before to_stop).
         
         Uses departures table directly since schedule.trips may not include all stops.
+        Filters by current time in Italy timezone (Europe/Rome).
         """
         from datetime import datetime, timedelta
+        import pytz
         
-        # Get current time
-        now = datetime.now()
-        current_time = now.strftime("%H:%M")
+        # Get current time in Italy timezone (Europe/Rome)
+        italy_tz = pytz.timezone('Europe/Rome')
+        now_italy = datetime.now(italy_tz)
+        current_time = now_italy.strftime("%H:%M")
+        current_hour = now_italy.hour
+        current_minute = now_italy.minute
         
         # Get all routes
         routes = db.query(Route).all()
@@ -460,6 +465,15 @@ class DatabaseService:
                 
                 # For each departure from from_stop, find corresponding departure at to_stop
                 for from_dep in from_departures:
+                    # Parse departure time to compare with current time
+                    dep_hour, dep_minute = map(int, from_dep.departure_time.split(':'))
+                    dep_total_minutes = dep_hour * 60 + dep_minute
+                    current_total_minutes = current_hour * 60 + current_minute
+                    
+                    # Only include future departures (after current time in Italy)
+                    if dep_total_minutes <= current_total_minutes:
+                        continue
+                    
                     # Find departure at to_stop with same trip_id
                     to_dep = db.query(Departure).filter(
                         Departure.route_id == route.id,
