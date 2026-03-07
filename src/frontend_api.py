@@ -464,3 +464,34 @@ def get_service_alerts(
     except Exception as e:
         logger.error(f"Error getting alerts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stops/normalize/{stop_id}")
+def normalize_stop_id(stop_id: str, db: Session = Depends(get_db)):
+    """
+    Normalize a stop ID by finding the correct version (with or without asterisk).
+    
+    This endpoint helps the frontend handle stop IDs that may or may not have
+    an asterisk prefix.
+    """
+    logger.info(f"Frontend API: normalize_stop_id - {stop_id}")
+    
+    try:
+        # Try to find the stop with normalization
+        stop = db_service.get_stop(db, stop_id)
+        
+        if not stop:
+            raise HTTPException(status_code=404, detail=f"Stop '{stop_id}' not found")
+        
+        return {
+            "originalId": stop_id,
+            "normalizedId": stop["id"],
+            "name": stop["name"],
+            "hasAsterisk": stop["id"].startswith("*")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error normalizing stop ID: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

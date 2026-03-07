@@ -78,8 +78,18 @@ class DatabaseService:
         return []
     
     def get_stop(self, db: Session, stop_id: str) -> Optional[Dict]:
-        """Get stop by ID."""
+        """Get stop by ID, handling asterisk variations."""
+        # Try exact match first
         stop = db.query(Stop).filter(Stop.id == stop_id).first()
+        
+        # If not found and doesn't have asterisk, try with asterisk
+        if not stop and not stop_id.startswith("*"):
+            stop = db.query(Stop).filter(Stop.id == f"*{stop_id}").first()
+        
+        # If not found and has asterisk, try without asterisk
+        if not stop and stop_id.startswith("*"):
+            stop = db.query(Stop).filter(Stop.id == stop_id[1:]).first()
+        
         return stop.to_dict() if stop else None
     
     def get_departures(
@@ -90,10 +100,17 @@ class DatabaseService:
         periodicity: str = None,
         after_time: str = None
     ) -> List[Dict]:
-        """Get next departures from a stop, handling late night (after 11 PM)."""
+        """Get next departures from a stop, handling late night (after 11 PM) and asterisk variations."""
         from datetime import datetime, time as dt_time
         
-        query = db.query(Departure).filter(Departure.stop_id == stop_id)
+        # Normalize stop_id - try with and without asterisk
+        query = db.query(Departure).filter(
+            or_(
+                Departure.stop_id == stop_id,
+                Departure.stop_id == f"*{stop_id}",
+                Departure.stop_id == stop_id[1:] if stop_id.startswith("*") else None
+            )
+        )
         
         # Determine periodicity if not provided
         if not periodicity:
@@ -251,20 +268,45 @@ class DatabaseService:
         to_stop_id: str, 
         limit: int = 3
     ) -> List[Dict]:
-        """Find routes between two stops."""
+        """Find routes between two stops, handling asterisk variations in stop IDs."""
         # Get all routes
         routes = db.query(Route).all()
         
         results = []
         
+        # Normalize stop IDs - create variations
+        from_variations = [from_stop_id]
+        if not from_stop_id.startswith("*"):
+            from_variations.append(f"*{from_stop_id}")
+        else:
+            from_variations.append(from_stop_id[1:])
+        
+        to_variations = [to_stop_id]
+        if not to_stop_id.startswith("*"):
+            to_variations.append(f"*{to_stop_id}")
+        else:
+            to_variations.append(to_stop_id[1:])
+        
         for route in routes:
-            # Check if both stops are in this route
+            # Check if both stops are in this route (with variations)
             stop_ids = [s["id"] for s in route.stops_order]
             
-            if from_stop_id in stop_ids and to_stop_id in stop_ids:
-                from_idx = stop_ids.index(from_stop_id)
-                to_idx = stop_ids.index(to_stop_id)
-                
+            from_idx = None
+            to_idx = None
+            
+            # Find from_stop with variations
+            for var in from_variations:
+                if var in stop_ids:
+                    from_idx = stop_ids.index(var)
+                    break
+            
+            # Find to_stop with variations
+            for var in to_variations:
+                if var in stop_ids:
+                    to_idx = stop_ids.index(var)
+                    break
+            
+            if from_idx is not None and to_idx is not None:
                 # Only if from comes before to
                 if from_idx < to_idx:
                     # Get schedule to find times
