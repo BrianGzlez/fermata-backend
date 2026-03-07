@@ -230,6 +230,24 @@ def plan_journey(
     logger.info(f"Frontend API: plan_journey - from={from_stop}, to={to_stop}, maxTransfers={maxTransfers}")
     
     try:
+        # Get origin and destination info first (outside loop)
+        origin_obj = db_service.get_stop(db, from_stop)
+        destination_obj = db_service.get_stop(db, to_stop)
+        
+        origin_info = {
+            "id": from_stop,
+            "name": origin_obj["name"] if origin_obj else from_stop,
+            "latitude": origin_obj.get("latitude", 0) if origin_obj else 0,
+            "longitude": origin_obj.get("longitude", 0) if origin_obj else 0
+        }
+        
+        destination_info = {
+            "id": to_stop,
+            "name": destination_obj["name"] if destination_obj else to_stop,
+            "latitude": destination_obj.get("latitude", 0) if destination_obj else 0,
+            "longitude": destination_obj.get("longitude", 0) if destination_obj else 0
+        }
+        
         # Find routes with transfers
         journeys_data = db_service.plan_route_with_transfers(
             db, from_stop, to_stop, maxTransfers, limit=5
@@ -300,24 +318,6 @@ def plan_journey(
                 }
                 
                 legs_list.append(leg_formatted)
-            
-            # Get origin and destination info
-            origin_obj = db_service.get_stop(db, from_stop)
-            destination_obj = db_service.get_stop(db, to_stop)
-            
-            origin_info = {
-                "id": from_stop,
-                "name": origin_obj["name"] if origin_obj else from_stop,
-                "latitude": origin_obj.get("latitude", 0) if origin_obj else 0,
-                "longitude": origin_obj.get("longitude", 0) if origin_obj else 0
-            }
-            
-            destination_info = {
-                "id": to_stop,
-                "name": destination_obj["name"] if destination_obj else to_stop,
-                "latitude": destination_obj.get("latitude", 0) if destination_obj else 0,
-                "longitude": destination_obj.get("longitude", 0) if destination_obj else 0
-            }
             
             journey = {
                 "id": f"journey-{idx + 1}",
