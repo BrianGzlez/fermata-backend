@@ -102,6 +102,13 @@ class DatabaseService:
     ) -> List[Dict]:
         """Get next departures from a stop, handling late night (after 11 PM) and asterisk variations."""
         from datetime import datetime, time as dt_time
+        import pytz
+        
+        # Get current time in Italy timezone if not provided
+        if not after_time:
+            italy_tz = pytz.timezone('Europe/Rome')
+            now_italy = datetime.now(italy_tz)
+            after_time = now_italy.strftime("%H:%M")
         
         # Normalize stop_id - try with and without asterisk
         base_query = db.query(Departure).filter(
@@ -114,7 +121,9 @@ class DatabaseService:
         
         # Determine periodicity if not provided
         if not periodicity:
-            now = datetime.now()
+            # Use Italy timezone for determining periodicity
+            italy_tz = pytz.timezone('Europe/Rome')
+            now = datetime.now(italy_tz)
             is_weekend = now.weekday() >= 5  # 5=Saturday, 6=Sunday
             is_sunday = now.weekday() == 6
             month = now.month
@@ -140,29 +149,33 @@ class DatabaseService:
         query = base_query.filter(Departure.periodicity == periodicity)
         
         # Handle late night (after 11 PM) - show tomorrow's early morning buses
-        if after_time:
-            current_hour = int(after_time.split(":")[0])
-            if current_hour >= 23:
-                # Show buses from 06:00 to 09:00 next day
-                query = query.filter(
-                    Departure.departure_time >= "06:00",
-                    Departure.departure_time <= "09:00"
-                )
-            else:
-                # Show buses after current time
-                query = query.filter(Departure.departure_time >= after_time)
+        current_hour = int(after_time.split(":")[0])
+        if current_hour >= 23:
+            # Show buses from 06:00 to 09:00 next day
+            query = query.filter(
+                Departure.departure_time >= "06:00",
+                Departure.departure_time <= "09:00"
+            )
+        else:
+            # Show buses after current time
+            query = query.filter(Departure.departure_time >= after_time)
         
         departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
         
-        # If no departures found after current time, get first departures of the day
-        if not departures and after_time:
+        # If no departures found after current time, show early morning buses (next day)
+        if not departures and current_hour < 23:
             query = base_query.filter(Departure.periodicity == periodicity)
+            query = query.filter(
+                Departure.departure_time >= "06:00",
+                Departure.departure_time <= "09:00"
+            )
             departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
         
         # If still no departures with preferred periodicity, try fallback periodicities
         if not departures:
             # Fallback order depends on day
-            now = datetime.now()
+            italy_tz = pytz.timezone('Europe/Rome')
+            now = datetime.now(italy_tz)
             is_sunday = now.weekday() == 6
             
             if is_sunday:
@@ -174,17 +187,25 @@ class DatabaseService:
             
             for fallback_per in fallback_periodicities:
                 query = base_query.filter(Departure.periodicity == fallback_per)
-                if after_time:
-                    current_hour = int(after_time.split(":")[0])
-                    if current_hour < 23:
-                        query = query.filter(Departure.departure_time >= after_time)
+                if current_hour >= 23:
+                    query = query.filter(
+                        Departure.departure_time >= "06:00",
+                        Departure.departure_time <= "09:00"
+                    )
+                elif current_hour < 23:
+                    # Try to get future departures first
+                    query_future = query.filter(Departure.departure_time >= after_time)
+                    departures = query_future.order_by(Departure.departure_time).limit(limit * 2).all()
+                    if departures:
+                        break
+                    # If no future departures, get early morning (next day)
+                    query = query.filter(
+                        Departure.departure_time >= "06:00",
+                        Departure.departure_time <= "09:00"
+                    )
                 departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
                 if departures:
                     break
-        
-        # Last resort: get any departures without time filter
-        if not departures:
-            departures = base_query.order_by(Departure.departure_time).limit(limit * 2).all()
         
         # Convert to dict and sort by time
         results = [d.to_dict() for d in departures]
