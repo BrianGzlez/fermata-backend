@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
   workflow_dispatch:  # Allow manual trigger
+    inputs:
+      test_mode:
+        description: 'Run in test mode (only 2 routes)'
+        required: false
+        default: 'false'
 
 jobs:
   sync:
@@ -23,7 +28,15 @@ jobs:
         pip install --upgrade pip
         pip install -r requirements.txt
     
-    - name: Run data sync
+    - name: Run data sync (test mode)
+      if: github.event.inputs.test_mode == 'true'
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      run: |
+        python sync_data.py --test
+    
+    - name: Run data sync (full)
+      if: github.event.inputs.test_mode != 'true'
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
       run: |
