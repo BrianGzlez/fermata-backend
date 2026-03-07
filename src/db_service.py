@@ -115,21 +115,25 @@ class DatabaseService:
         # Determine periodicity if not provided
         if not periodicity:
             now = datetime.now()
-            is_weekend = now.weekday() >= 5
+            is_weekend = now.weekday() >= 5  # 5=Saturday, 6=Sunday
+            is_sunday = now.weekday() == 6
             month = now.month
             
-            # Priority order for periodicity selection
-            if is_weekend:
-                # Weekends: try F (Feriale) first, then DF, then any
+            # Priority order for periodicity selection based on Consorzio rules
+            if is_sunday:
+                # Sundays: use DF (Domenica/Festivo) - fewer buses
+                periodicity = "DF"
+            elif is_weekend:
+                # Saturdays: use F (Feriale) - more buses than Sunday, less than weekdays
                 periodicity = "F"
             elif month == 8:
-                # August: try EST, then NS, then F
-                periodicity = "EST"
+                # August: try NS (Non Scolastico), then F
+                periodicity = "NS"
             elif month >= 9 or month <= 6:
-                # School period: try S, then F
+                # School period (Sept-June): try S (Scolastico), then F
                 periodicity = "S"
             else:
-                # Non-school period: try NS, then F
+                # Non-school period (July): try NS, then F
                 periodicity = "NS"
         
         # Try with preferred periodicity first
@@ -155,14 +159,28 @@ class DatabaseService:
             query = base_query.filter(Departure.periodicity == periodicity)
             departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
         
-        # If still no departures with preferred periodicity, try "F" (Feriale) as fallback
+        # If still no departures with preferred periodicity, try fallback periodicities
         if not departures:
-            query = base_query.filter(Departure.periodicity == "F")
-            if after_time:
-                current_hour = int(after_time.split(":")[0])
-                if current_hour < 23:
-                    query = query.filter(Departure.departure_time >= after_time)
-            departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
+            # Fallback order depends on day
+            now = datetime.now()
+            is_sunday = now.weekday() == 6
+            
+            if is_sunday:
+                # Sunday: try F as fallback
+                fallback_periodicities = ["F", "NS"]
+            else:
+                # Other days: try F as fallback
+                fallback_periodicities = ["F", "DF"]
+            
+            for fallback_per in fallback_periodicities:
+                query = base_query.filter(Departure.periodicity == fallback_per)
+                if after_time:
+                    current_hour = int(after_time.split(":")[0])
+                    if current_hour < 23:
+                        query = query.filter(Departure.departure_time >= after_time)
+                departures = query.order_by(Departure.departure_time).limit(limit * 2).all()
+                if departures:
+                    break
         
         # Last resort: get any departures without time filter
         if not departures:
@@ -197,16 +215,20 @@ class DatabaseService:
         
         # Determine periodicity based on date and time
         is_weekend = target_date.weekday() >= 5
+        is_sunday = target_date.weekday() == 6
         month = target_date.month
         day = target_date.day
         
         # Check if it's school period (Sept 10 - June 30, excluding August)
         is_school_period = (month >= 9 or month <= 6) and month != 8
         
-        # Priority order for periodicity
-        if is_weekend:
-            # Weekends and holidays - use F (Feriale) as FEST doesn't exist in data
-            periodicity_priority = ["F", "Fer", "DF", "NS"]
+        # Priority order for periodicity based on Consorzio rules
+        if is_sunday:
+            # Sundays and holidays - use DF (Domenica/Festivo)
+            periodicity_priority = ["DF", "F"]
+        elif is_weekend:
+            # Saturdays - use F (Feriale)
+            periodicity_priority = ["F", "DF"]
         elif month == 8:
             # August (summer)
             periodicity_priority = ["EST", "Est", "Non Scol", "F", "Fer"]
