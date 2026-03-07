@@ -323,6 +323,7 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                     Departure.itinerary == itinerary_value,
                                     Departure.periodicity == periodicity_value
                                 ).delete()
+                                db.commit()  # Commit delete before insert
                                 
                                 # Save departures for each stop
                                 departures_to_add = []
@@ -355,6 +356,7 @@ def sync_schedules(db: Session, service: ConsorzioService, limit: int = None) ->
                                 # Bulk insert new departures
                                 if departures_to_add:
                                     db.bulk_save_objects(departures_to_add)
+                                    db.commit()  # Commit after insert
                                 
                                 log(f"    ✓ {periodicity_value}: {len(schedule_data.get('trips', []))} trips", "green")
                                 
