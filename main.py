@@ -331,13 +331,9 @@ def get_stop_departures(
     except Exception as e:
         logger.error(f"Error getting departures: {e}")
         raise HTTPException(status_code=500, detail=f"Error obteniendo salidas: {str(e)}")
-):
-    """Obtener próximas salidas desde una parada específica con periodicidad inteligente."""
-    logger.info(f"API call: get_stop_departures for '{stop_name}' on date {date}")
-    
-    # Parse target date
-    target_date = None
-    if date:
+
+
+@app.get("/schedule-smart/{line_id}/{itinerary}", tags=["Core"])
         try:
             from datetime import datetime
             target_date = datetime.strptime(date, "%Y-%m-%d").date()
