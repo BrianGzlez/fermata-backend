@@ -416,13 +416,14 @@ class DatabaseService:
         
         Returns departures where the route passes through both stops
         in the correct order (from_stop before to_stop).
+        
+        Uses departures table directly since schedule.trips may not include all stops.
         """
         from datetime import datetime, timedelta
         
         # Get current time
         now = datetime.now()
         current_time = now.strftime("%H:%M")
-        end_time = (now + timedelta(minutes=time_window)).strftime("%H:%M")
         
         # Get all routes
         routes = db.query(Route).all()
@@ -436,55 +437,51 @@ class DatabaseService:
             # Find indices with normalization
             from_idx = None
             to_idx = None
+            from_stop_in_route = None
+            to_stop_in_route = None
             
             for i, stop_id in enumerate(stop_ids):
+                # Check from_stop
                 if stop_id == from_stop_id or stop_id == f"*{from_stop_id}" or (from_stop_id.startswith("*") and stop_id == from_stop_id[1:]):
                     from_idx = i
+                    from_stop_in_route = stop_id
+                # Check to_stop
                 if stop_id == to_stop_id or stop_id == f"*{to_stop_id}" or (to_stop_id.startswith("*") and stop_id == to_stop_id[1:]):
                     to_idx = i
+                    to_stop_in_route = stop_id
             
             # Only if both stops found and from comes before to
             if from_idx is not None and to_idx is not None and from_idx < to_idx:
-                # Get schedules for this route
-                schedules = db.query(Schedule).filter(
-                    Schedule.route_id == route.id
+                # Get departures from from_stop for this route
+                from_departures = db.query(Departure).filter(
+                    Departure.route_id == route.id,
+                    Departure.stop_id == from_stop_in_route
                 ).all()
                 
-                for schedule in schedules:
-                    if not schedule.trips:
-                        continue
+                # For each departure from from_stop, find corresponding departure at to_stop
+                for from_dep in from_departures:
+                    # Find departure at to_stop with same trip_id
+                    to_dep = db.query(Departure).filter(
+                        Departure.route_id == route.id,
+                        Departure.stop_id == to_stop_in_route,
+                        Departure.trip_id == from_dep.trip_id,
+                        Departure.periodicity == from_dep.periodicity
+                    ).first()
                     
-                    # Find trips that go through both stops
-                    for trip in schedule.trips:
-                        from_time = None
-                        to_time = None
-                        
-                        for stop_data in trip["stops"]:
-                            stop_name = stop_data["stop"]
-                            stop_id_clean = stop_name.lower().replace(" ", "-").replace("'", "").replace("\n", " ").replace("  ", " ").strip()
-                            
-                            if stop_id_clean == from_stop_id or stop_id_clean == f"*{from_stop_id}" or (from_stop_id.startswith("*") and stop_id_clean == from_stop_id[1:]):
-                                from_time = stop_data["time"]
-                            elif stop_id_clean == to_stop_id or stop_id_clean == f"*{to_stop_id}" or (to_stop_id.startswith("*") and stop_id_clean == to_stop_id[1:]):
-                                if from_time:  # Only if we already found from_time
-                                    to_time = stop_data["time"]
-                                    break
-                        
-                        if from_time and to_time:
-                            # Check if within time window
-                            if from_time >= current_time and from_time <= end_time:
-                                results.append({
-                                    "route_id": route.id,
-                                    "route_name": route.name,
-                                    "trip_id": trip["trip_id"],
-                                    "periodicity": schedule.periodicity,
-                                    "from_time": from_time,
-                                    "to_time": to_time,
-                                    "from_index": from_idx,
-                                    "to_index": to_idx,
-                                    "total_stops": len(route.stops_order),
-                                    "destination": schedule.stops[-1]["name"] if schedule.stops else ""
-                                })
+                    if to_dep and to_dep.departure_time > from_dep.departure_time:
+                        # Valid direct route found
+                        results.append({
+                            "route_id": route.id,
+                            "route_name": route.name,
+                            "trip_id": from_dep.trip_id,
+                            "periodicity": from_dep.periodicity,
+                            "from_time": from_dep.departure_time,
+                            "to_time": to_dep.departure_time,
+                            "from_index": from_idx,
+                            "to_index": to_idx,
+                            "total_stops": len(route.stops_order),
+                            "destination": from_dep.destination
+                        })
         
         # Sort by departure time
         results.sort(key=lambda x: x["from_time"])
