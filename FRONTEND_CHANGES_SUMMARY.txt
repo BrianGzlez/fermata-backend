@@ -1,0 +1,110 @@
+RESUMEN DE CAMBIOS PARA EL FRONTEND
+====================================
+
+CAMBIOS IMPORTANTES - BACKEND AHORA USA BASE DE DATOS
+------------------------------------------------------
+
+El backend ha sido completamente migrado a usar PostgreSQL en lugar de scraping en tiempo real.
+
+MEJORAS DE RENDIMIENTO:
+- Antes: 3-5 segundos por request (scraping en tiempo real)
+- Ahora: < 100ms por request (lectura desde base de datos)
+
+ENDPOINTS DISPONIBLES (todos bajo /api/*):
+-------------------------------------------
+
+1. BÚSQUEDA DE PARADAS
+   GET /api/stops/search?query=...&lat=...&lng=...&radius=...&limit=...
+   - Búsqueda por texto o coordenadas GPS
+   - Respuesta rápida desde BD
+
+2. DETALLES DE PARADA
+   GET /api/stops/{stop_id}
+   - Información completa de una parada
+   - Incluye coordenadas y rutas
+
+3. PRÓXIMAS SALIDAS
+   GET /api/stops/{stop_id}/departures?limit=10&timeWindow=60
+   - Próximas salidas desde una parada
+   - NUEVO: Maneja horario nocturno automáticamente (después de 23:00 muestra buses de mañana 06:00-09:00)
+   - Usa periodicidad inteligente basada en fecha
+
+4. LISTA DE RUTAS
+   GET /api/routes
+   - Todas las rutas disponibles
+   - Datos desde BD
+
+5. DETALLES DE RUTA
+   GET /api/routes/{route_id}
+   - Información completa de una ruta
+   - Incluye paradas en orden
+
+6. HORARIOS DE RUTA
+   GET /api/routes/{route_id}/schedule?date=YYYY-MM-DD&stopId=...
+   - Horarios para una ruta en una fecha específica
+   - NUEVO: Selección inteligente de periodicidad:
+     * Fines de semana → FEST (Festivo)
+     * Agosto → EST (Estivo)
+     * Sept 10 - Jun 30 → SCO (Scolastico)
+     * Julio, antes Sept 10 → Non Scol
+   - IMPORTANTE: Ahora retorna 200 con array vacío si no hay datos (antes era 404)
+
+7. PLANIFICACIÓN DE VIAJE
+   GET /api/routes/plan?from=...&to=...&time=...&arriveBy=...&maxTransfers=...
+   - Calcular rutas entre dos paradas
+   - Datos desde BD
+
+8. ALERTAS DE SERVICIO
+   GET /api/alerts?routeId=...&severity=...
+   - Alertas activas del servicio
+   - Filtrable por ruta y severidad
+
+CAMBIOS EN COMPORTAMIENTO:
+---------------------------
+
+1. PERIODICIDAD INTELIGENTE:
+   - El backend ahora selecciona automáticamente la periodicidad correcta basándose en:
+     * Día de la semana (fin de semana vs día laboral)
+     * Mes del año (agosto = verano, sept-jun = escolar)
+     * Fecha específica (antes/después del 10 de septiembre)
+   - El frontend NO necesita preocuparse por seleccionar periodicidad
+
+2. HORARIO NOCTURNO:
+   - Después de las 23:00, el endpoint de salidas automáticamente muestra
+     los primeros buses del día siguiente (06:00-09:00)
+   - El frontend NO necesita lógica especial para esto
+
+3. RESPUESTAS VACÍAS:
+   - /api/routes/{route_id}/schedule ahora retorna 200 con schedules: []
+     en lugar de 404 cuando no hay datos
+   - Esto facilita el manejo en el frontend
+
+4. GEOLOCALIZACIÓN:
+   - Las coordenadas de paradas están en la BD
+   - Algunos stops pueden tener latitude/longitude en 0 si no hay datos
+   - El frontend debe verificar si las coordenadas son válidas antes de usarlas
+
+SINCRONIZACIÓN DE DATOS:
+-------------------------
+
+- Los datos se sincronizan semanalmente mediante GitHub Actions
+- El cron job actualiza: paradas, rutas, horarios, salidas
+- Solo se actualizan datos que cambiaron (no duplica datos existentes)
+- El frontend siempre obtiene datos actualizados de la BD
+
+PRÓXIMOS PASOS:
+---------------
+
+1. Verificar que el deployment en Render sea exitoso
+2. Ejecutar sync en modo test (2 rutas) para verificar
+3. Si test OK, ejecutar sync completo con --all
+4. Verificar que todos los endpoints respondan rápido
+5. Solucionar problema de geolocalización (algunas paradas sin coordenadas)
+
+CONTACTO:
+---------
+
+Si hay problemas o preguntas sobre los endpoints, revisar:
+- GUIA_COMPLETA_INTEGRACION.md - Guía completa de integración
+- API_SPECIFICATION.md - Especificación de API
+- /docs - Documentación interactiva de Swagger
